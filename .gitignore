@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+!**/.env.example
+
+# First-run marker (local only)
+.db-seeded
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build output
+dist/
+client/dist/
+
+# Uploads & local data
+uploads/
+nexuscore/NexusCore.Api/uploads/
+
+# IDE
+.vs/
+*.rsuser
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
