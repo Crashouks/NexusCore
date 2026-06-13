@@ -36,6 +36,19 @@ Make sure MySQL is running on port **3306** before starting the app.
 
    Sign in with one of the [default accounts](#default-login-accounts) below.
 
+### Cloud gaming on your PC (Windows)
+
+Use **`start-all.bat`** in the project root to open **two windows**: website + API, and the cloud agent.
+
+One-time setup:
+
+1. Log in as **admin** → **Admin → Cloud** → **Add Machine** (tier **Real**), map game `.exe` paths, set optional passwords.
+2. On your machine row, click **Agent** (or **Edit → Download config.json**).
+3. Save the file as `nexuscore/agent/config.json`.
+4. Double-click **`start-all.bat`** again (or `nexuscore/agent/start-agent.bat` if the app is already running).
+
+When the agent connects, Admin → Cloud shows **Agent: Connected** for your server.
+
 ## Quick start (macOS / Linux)
 
 ```bash
@@ -155,11 +168,13 @@ npm run seed
 
 ```
 NexusCore/
-├── start.bat / start.ps1   # One-command launcher (Windows)
-├── stop.bat                # Stop dev servers (Windows)
+├── start.bat / start.ps1       # Website + API (Windows)
+├── start-all.bat / start-all.ps1  # Website + API + cloud agent (Windows)
+├── stop.bat                    # Stop dev servers (Windows)
 └── nexuscore/
-    ├── NexusCore.Api/      # C# ASP.NET Core API
-    ├── client/             # React + Vite frontend
-    ├── schema.sql          # Database schema
-    └── seed.js             # Sample data seeder
+    ├── NexusCore.Api/          # C# ASP.NET Core API
+    ├── client/                 # React + Vite frontend
+    ├── agent/                  # Cloud agent (screen stream + game launch)
+    ├── schema.sql              # Database schema
+    └── seed.js                 # Sample data seeder
 ```

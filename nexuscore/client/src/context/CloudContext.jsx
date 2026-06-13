@@ -45,8 +45,8 @@ export function CloudProvider({ children }) {
     return () => clearInterval(iv);
   }, [session, refreshSession]);
 
-  const startSession = async (gameId, billingMode) => {
-    const data = await api.cloud.sessionStart(gameId, billingMode);
+  const startSession = async (gameId, billingMode, serverId, serverPassword) => {
+    const data = await api.cloud.sessionStart(gameId, billingMode, serverId, serverPassword);
     await refreshSession();
     return data;
   };

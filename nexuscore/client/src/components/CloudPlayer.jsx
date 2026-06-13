@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import Icon from './Icon';
+import { useRealStream } from '../hooks/useRealStream';
 
 const CURSOR_HIDE_MS = 2800;
 const LEFT_EDGE_PX = 56;
@@ -71,6 +72,14 @@ export default function CloudPlayer({
   const [leftEdgeHover, setLeftEdgeHover] = useState(false);
   const [muted, setMuted] = useState(false);
   const stats = useTelemetry(!!session, targetFps);
+  const isReal = !!session?.is_real_stream;
+  const { canvasRef, bindViewport } = useRealStream(session, isReal);
+  const viewportRef = useRef(null);
+
+  useEffect(() => {
+    if (!isReal || !viewportRef.current) return;
+    return bindViewport(viewportRef.current);
+  }, [isReal, bindViewport, session?.session_id]);
 
   const active = !!session;
   const showStatsPanel = statsLocked || (leftEdgeHover && cursorVisible);
@@ -148,9 +157,16 @@ export default function CloudPlayer({
         </div>
 
         {active ? (
-          <div className="cloud-player-viewport" style={{ backgroundImage: `url(${session.cover_url})` }}>
-            <div className="cloud-player-backdrop" />
-            <div className="cloud-scanlines" aria-hidden="true" />
+          <div
+            ref={viewportRef}
+            className="cloud-player-viewport"
+            style={isReal ? { background: '#000' } : { backgroundImage: `url(${session.cover_url})` }}
+          >
+            {isReal && (
+              <canvas ref={canvasRef} className="cloud-real-canvas" style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
+            )}
+            {!isReal && <div className="cloud-player-backdrop" />}
+            {!isReal && <div className="cloud-scanlines" aria-hidden="true" />}
 
             <div className={`cloud-left-edge-zone ${cursorVisible ? '' : 'disabled'}`} aria-hidden="true" />
 
@@ -185,7 +201,7 @@ export default function CloudPlayer({
               </div>
               <div className="cloud-drawer-meta">
                 <StatChip label="ENC" value="H.265" />
-                <StatChip label="SERVER" value="EU-Central" />
+                <StatChip label="SERVER" value={session.server_name || session.server_region?.replace(/-/g, ' ') || 'EU-Central'} />
                 <NetworkBars quality={displayQuality} />
               </div>
             </div>
@@ -197,7 +213,7 @@ export default function CloudPlayer({
               </div>
             )}
 
-            <div className={`cloud-player-center minimal ${showStatsPanel ? 'dimmed' : ''}`}>
+            <div className={`cloud-player-center minimal ${showStatsPanel ? 'dimmed' : ''} ${isReal ? 'real-hidden' : ''}`}>
               <img src={session.cover_url} alt="" className="cloud-poster" />
               <p className="font-display cloud-center-title">{session.name}</p>
               <div className="cloud-timer-row">

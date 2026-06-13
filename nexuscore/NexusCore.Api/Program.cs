@@ -13,6 +13,7 @@ LoadParentEnvFile(builder.Environment.ContentRootPath);
 builder.Services.AddSingleton<DbService>();
 builder.Services.AddSingleton<JwtTokenService>();
 builder.Services.AddSingleton<SessionExpiryService>();
+builder.Services.AddSingleton<CloudServerService>();
 builder.Services.AddSingleton<ChatService>();
 builder.Services.AddSingleton<ForumService>();
 builder.Services.AddSingleton<NotificationService>();
@@ -123,6 +124,7 @@ app.UseStaticFiles(new StaticFileOptions
 
 app.MapControllers();
 app.MapHub<ChatHub>("/hubs/chat");
+app.MapHub<CloudStreamHub>("/hubs/cloud-stream");
 
 var port = Environment.GetEnvironmentVariable("PORT")
     ?? builder.Configuration["Port"]
@@ -132,6 +134,7 @@ app.Urls.Add($"http://localhost:{port}");
 Console.WriteLine($"NexusCore API running on http://localhost:{port}");
 Console.WriteLine($"Swagger UI: http://localhost:{port}/swagger");
 Console.WriteLine($"Chat Hub: ws://localhost:{port}/hubs/chat");
+Console.WriteLine($"Cloud Stream Hub: ws://localhost:{port}/hubs/cloud-stream");
 
 app.Run();
 

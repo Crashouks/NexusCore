@@ -1,0 +1,14 @@
+{
+  "name": "nexuscore-cloud-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Run on your PC to launch Unity games and stream screen for Cloud Play",
+  "scripts": {
+    "start": "node index.js",
+    "postinstall": "echo Agent ready. Run: npm start"
+  },
+  "dependencies": {
+    "@microsoft/signalr": "^8.0.7",
+    "screenshot-desktop": "^1.15.0"
+  }
+}

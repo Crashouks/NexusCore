@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import Icon from './Icon';
+import ServerPicker, { getPreferredServerId, setPreferredServerId } from './ServerPicker';
 
 export function getPlanStreamLimits(plan) {
   switch (plan) {
@@ -22,6 +23,8 @@ export default function CloudStreamSettings({
   onQualityChange,
   onFpsChange,
   onToggleStatsLock,
+  preferredServerId,
+  onPreferredServerChange,
 }) {
   const limits = getPlanStreamLimits(plan);
   const canChangeFps = limits.fps.length > 1;
@@ -30,6 +33,18 @@ export default function CloudStreamSettings({
   return (
     <div className="cloud-settings-card glass">
       <h2 className="font-display cloud-settings-title">Streaming Settings</h2>
+
+      <div className="cloud-settings-block">
+        <label className="cloud-settings-label">Preferred server</label>
+        <ServerPicker
+          selectedId={preferredServerId ?? getPreferredServerId()}
+          onSelect={(s) => {
+            setPreferredServerId(s.server_id);
+            onPreferredServerChange?.(s.server_id);
+          }}
+          compact
+        />
+      </div>
 
       <div className="cloud-settings-block">
         <label className="cloud-settings-label">Stream Quality</label>

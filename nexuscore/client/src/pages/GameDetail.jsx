@@ -8,7 +8,9 @@ import { useToast } from '../components/Toast';
 import BuyModal from '../components/BuyModal';
 import QueueModal from '../components/QueueModal';
 import CloudBadge from '../components/CloudBadge';
+import ServerPicker, { ServerConnectModal, getPreferredServerId } from '../components/ServerPicker';
 import Icon from '../components/Icon';
+import Modal from '../components/Modal';
 import DiscountBadge, { formatGamePrice } from '../components/DiscountBadge';
 import { useDownloads } from '../context/DownloadContext';
 import { useNotifications } from '../context/NotificationContext';
@@ -19,7 +21,10 @@ export default function GameDetail() {
   const [game, setGame] = useState(null);
   const [trialInfo, setTrialInfo] = useState(null);
   const [buyOpen, setBuyOpen] = useState(false);
+  const [streamServerOpen, setStreamServerOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
+  const [pendingStream, setPendingStream] = useState(null);
+  const [connectServer, setConnectServer] = useState(null);
   const [reviewForm, setReviewForm] = useState({ rating: 8, review_text: '', is_recommended: true });
   const [lightbox, setLightbox] = useState(null);
   const { isAuth, ownsGame, profile, refreshLibrary, library } = useAuth();
@@ -78,25 +83,40 @@ export default function GameDetail() {
     } catch (err) { showToast(err.message, 'error'); }
   };
 
-  const handleStream = async (billingMode = 'subscription') => {
+  const beginStream = (billingMode) => {
+    setPendingStream({ billingMode });
+    setStreamServerOpen(true);
+  };
+
+  const confirmStreamServer = async (server, password) => {
+    setStreamServerOpen(false);
+    if (!server) return;
+    const billingMode = pendingStream?.billingMode || 'subscription';
+    const needsPassword = server.requires_player_password || server.availability === 'password_required';
+    if (needsPassword && !password) {
+      setConnectServer(server);
+      return;
+    }
     try {
       if (billingMode === 'free') {
         const q = await api.cloud.queueJoin(game.game_id);
-        if (q.skip_queue) {
-          await startSession(game.game_id, 'free');
-          navigate('/cloud');
-        } else {
+        if (!q.skip_queue) {
           await refreshQueue();
           setQueueOpen(true);
+          return;
         }
-      } else {
-        await startSession(game.game_id, billingMode);
-        navigate('/cloud');
       }
+      await startSession(game.game_id, billingMode, server.server_id, password);
+      navigate('/cloud');
     } catch (err) {
-      if (err.code === 'QUEUE_REQUIRED') { setQueueOpen(true); }
+      if (err.code === 'QUEUE_REQUIRED') setQueueOpen(true);
       else showToast(err.message, 'error');
     }
+    setPendingStream(null);
+  };
+
+  const handleStream = async (billingMode = 'subscription') => {
+    beginStream(billingMode);
   };
 
   const handleDownload = async () => {
@@ -293,8 +313,28 @@ export default function GameDetail() {
       </section>
 
       <BuyModal open={buyOpen} onClose={() => { setBuyOpen(false); setExpiredGame(null); }} game={game} />
+      <Modal open={streamServerOpen} onClose={() => { setStreamServerOpen(false); setPendingStream(null); }} title="Choose streaming server" wide>
+        <ServerPicker
+          gameId={game?.game_id}
+          selectedId={getPreferredServerId()}
+          onSelect={(s) => {
+            if (s.requires_player_password || s.availability === 'password_required') {
+              setConnectServer(s);
+              setStreamServerOpen(false);
+            } else {
+              confirmStreamServer(s, null);
+            }
+          }}
+        />
+      </Modal>
+      <ServerConnectModal
+        open={!!connectServer}
+        onClose={() => setConnectServer(null)}
+        server={connectServer}
+        onConfirm={(pw) => { confirmStreamServer(connectServer, pw); setConnectServer(null); }}
+      />
       {queueOpen && <QueueModal game={game} onClose={() => setQueueOpen(false)}
-        onConnect={async () => { await startSession(game.game_id, 'free'); setQueueOpen(false); navigate('/cloud'); }} />}
+        onConnect={() => { setQueueOpen(false); beginStream('free'); }} />}
     </div>
   );
 }

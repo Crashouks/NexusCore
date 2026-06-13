@@ -10,7 +10,7 @@ namespace NexusCore.Api.Controllers;
 
 [ApiController]
 [Route("api/cloud")]
-public class CloudController(DbService db, SessionExpiryService sessions, ChatService chat, IConfiguration config) : ControllerBase
+public class CloudController(DbService db, SessionExpiryService sessions, ChatService chat, CloudServerService cloudServers) : ControllerBase
 {
     private static readonly Dictionary<string, (string resolution, int fps, bool rayTracing)> PlanSpecs = new()
     {
@@ -20,7 +20,8 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
         ["ultimate"] = ("4K", 144, true),
     };
 
-    private int FreeSlots => int.TryParse(Environment.GetEnvironmentVariable("FREE_CLOUD_SLOTS") ?? config["FREE_CLOUD_SLOTS"], out var n) ? n : 3;
+    private async Task<bool> HasAvailableCapacityAsync(MySqlConnector.MySqlConnection conn) =>
+        await cloudServers.HasAvailableSlotAsync(conn);
 
     [HttpGet("plans")]
     [AllowAnonymous]
@@ -137,9 +138,7 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
             var existing = (await conn.QueryAsync("SELECT * FROM cloud_queue WHERE user_id=@uid", new { uid = userId })).ToList();
             if (existing.Count > 0) return ApiResults.Error(409, "Already in queue", "ALREADY_IN_QUEUE");
 
-            var freeCount = await conn.ExecuteScalarAsync<int>(
-                "SELECT COUNT(*) FROM cloud_sessions WHERE plan='free' AND status='active'");
-            if (freeCount < FreeSlots)
+            if (await HasAvailableCapacityAsync(conn))
                 return Ok(new { skipQueue = true, message = "Slot available — start session directly" });
 
             await conn.ExecuteAsync(
@@ -184,6 +183,24 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
             }
 
             return Ok(new { message = "Left queue" });
+        }
+        catch (Exception ex) { return ApiResults.Error(500, ex.Message, "SERVER_ERROR"); }
+    }
+
+    [HttpGet("servers")]
+    [Authorize]
+    public async Task<IActionResult> ListServers([FromQuery] int? gameId)
+    {
+        try
+        {
+            await using var conn = db.CreateConnection();
+            await conn.OpenAsync();
+            var users = (await conn.QueryAsync<dynamic>(
+                "SELECT cloud_plan FROM users WHERE user_id=@uid", new { uid = User.GetUserId() })).ToList();
+            var plan = users.Count > 0 ? (string)users[0].cloud_plan : "free";
+            var servers = await cloudServers.ListPublicServersAsync(gameId, plan);
+            var preferred = User.GetUserId(); // client stores in localStorage
+            return Ok(new { servers, preferred_server_id = (int?)null });
         }
         catch (Exception ex) { return ApiResults.Error(500, ex.Message, "SERVER_ERROR"); }
     }
@@ -233,9 +250,7 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
                 var usedToday = await ResetFreeDailyIfNeededAsync(conn, userId);
                 if (usedToday) return ApiResults.Error(403, "Daily free hour used", "FREE_LIMIT_REACHED");
 
-                var freeCount = await conn.ExecuteScalarAsync<int>(
-                    "SELECT COUNT(*) FROM cloud_sessions WHERE plan='free' AND status='active'");
-                if (freeCount >= FreeSlots)
+                if (!await HasAvailableCapacityAsync(conn))
                 {
                     var queue = (await conn.QueryAsync<dynamic>(
                         "SELECT * FROM cloud_queue WHERE user_id=@uid AND status='ready'", new { uid = userId })).ToList();
@@ -254,19 +269,61 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
                 await conn.ExecuteAsync("DELETE FROM cloud_queue WHERE user_id=@uid", new { uid = userId });
             }
 
+            if (!body.ServerId.HasValue || body.ServerId.Value <= 0)
+                return ApiResults.Error(400, "Select a streaming server in Cloud Settings", "SERVER_REQUIRED");
+
+            var userCloudPlan = (string)user.cloud_plan;
+            var (server, serverErr) = await cloudServers.ResolveServerForSessionAsync(
+                conn, body.ServerId.Value, body.GameId, userCloudPlan, body.ServerPassword);
+            if (server == null)
+                return ApiResults.Error(403, serverErr ?? "Server unavailable", "SERVER_UNAVAILABLE");
+
+            var tier = (string)server.server_tier;
+            var isRealStream = tier == "real";
+            int serverId = (int)server.server_id;
+            string region = (string)server.region;
+            string? serverName = (string)server.name;
+            string? gpuModel = server.gpu_model as string;
+
+            if (isRealStream && !await cloudServers.HasAvailableSlotAsync(conn))
+            {
+                var realCapacity = await conn.ExecuteScalarAsync<int>(@"
+                    SELECT COALESCE(SUM(max_slots),0) FROM cloud_servers
+                    WHERE server_tier='real' AND status='online'
+                      AND last_heartbeat >= DATE_SUB(NOW(), INTERVAL 90 SECOND)");
+                var realActive = await conn.ExecuteScalarAsync<int>(@"
+                    SELECT COUNT(*) FROM cloud_sessions cs
+                    JOIN cloud_servers s ON cs.server_id=s.server_id
+                    WHERE cs.status='active' AND s.server_tier='real'");
+                if (realActive >= realCapacity)
+                    return ApiResults.Error(503, "All real streaming machines are at capacity", "NO_SERVER_CAPACITY");
+            }
+
             var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
             var sessionId = await conn.ExecuteScalarAsync<long>(
-                @"INSERT INTO cloud_sessions (user_id, game_id, plan, max_duration_mins, stream_token, status)
-                  VALUES (@uid, @gid, @plan, @max, @token, 'active');
+                @"INSERT INTO cloud_sessions (user_id, game_id, plan, max_duration_mins, stream_token, server_id, server_region, is_real_stream, status)
+                  VALUES (@uid, @gid, @plan, @max, @token, @sid, @region, @real, 'active');
                   SELECT LAST_INSERT_ID();",
-                new { uid = userId, gid = body.GameId, plan, max = maxDuration, token });
+                new { uid = userId, gid = body.GameId, plan, max = maxDuration, token, sid = serverId, region, real = isRealStream });
+
+            string? launchStatus = null;
+            if (isRealStream && server.executable_path != null)
+            {
+                await cloudServers.EnqueueLaunchJobAsync(conn, (int)sessionId, serverId, body.GameId, (string)server.executable_path);
+                launchStatus = "pending";
+            }
 
             var specs = PlanSpecs.GetValueOrDefault(plan, PlanSpecs["free"]);
             return StatusCode(201, new
             {
                 sessionId, streamToken = token,
-                streamUrl = $"https://stream.NexusCore.fake/session/{token}",
-                region = "eu-central",
+                isRealStream,
+                region,
+                serverName,
+                serverId,
+                gpuModel,
+                launchStatus,
+                serverTier = tier,
                 resolution = specs.resolution,
                 fps = specs.fps,
                 rayTracing = specs.rayTracing,
@@ -294,6 +351,8 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
             await conn.ExecuteAsync(
                 "UPDATE cloud_sessions SET status='ended', ended_at=NOW(), duration_mins=@dur WHERE session_id=@id",
                 new { dur = duration, id = (int)s.session_id });
+            if (s.server_id != null)
+                await cloudServers.EnqueueStopJobAsync(conn, (int)s.session_id, (int)s.server_id, (int)s.game_id);
             if ((string)s.plan == "free") await sessions.PromoteQueueAsync(conn);
             return Ok(new { message = "Session ended", durationMins = duration });
         }
@@ -322,6 +381,8 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
                     await conn.ExecuteAsync(
                         "UPDATE cloud_sessions SET status='expired', ended_at=NOW(), duration_mins=@dur WHERE session_id=@id",
                         new { dur = maxDur, id = (int)s.session_id });
+                    if (s.server_id != null)
+                        await cloudServers.EnqueueStopJobAsync(conn, (int)s.session_id, (int)s.server_id, (int)s.game_id);
                     if ((string)s.plan == "free") await sessions.PromoteQueueAsync(conn);
                     return Ok(new { autoEnded = true, reason = "Time limit reached" });
                 }
@@ -341,8 +402,11 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
             await using var conn = db.CreateConnection();
             await conn.OpenAsync();
             var rows = (await conn.QueryAsync<dynamic>(
-                @"SELECT cs.*, g.name, g.cover_url, g.slug FROM cloud_sessions cs
+                @"SELECT cs.*, g.name, g.cover_url, g.slug,
+                         s.name AS server_name, s.gpu_model AS server_gpu
+                  FROM cloud_sessions cs
                   JOIN games g ON cs.game_id=g.game_id
+                  LEFT JOIN cloud_servers s ON cs.server_id=s.server_id
                   WHERE cs.user_id=@uid AND cs.status='active'", new { uid = User.GetUserId() })).ToList();
             if (rows.Count == 0) return Ok(null);
             var s = rows[0];
@@ -360,6 +424,7 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
             dict["fps"] = specs.fps;
             dict["rayTracing"] = specs.rayTracing;
             dict["minutesRemaining"] = minutesRemaining;
+            dict["is_real_stream"] = DbValue.IsTrue(s.is_real_stream);
             return Ok(dict);
         }
         catch (Exception ex) { return ApiResults.Error(500, ex.Message, "SERVER_ERROR"); }
@@ -396,8 +461,11 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
             await using var conn = db.CreateConnection();
             await conn.OpenAsync();
             var sessionRows = await conn.QueryAsync(
-                @"SELECT cs.*, u.username, g.name AS game_name FROM cloud_sessions cs
+                @"SELECT cs.*, u.username, g.name AS game_name,
+                         s.name AS server_name, s.region AS server_region_name
+                  FROM cloud_sessions cs
                   JOIN users u ON cs.user_id=u.user_id JOIN games g ON cs.game_id=g.game_id
+                  LEFT JOIN cloud_servers s ON cs.server_id=s.server_id
                   ORDER BY cs.started_at DESC LIMIT 100");
             var queue = await conn.QueryAsync(
                 @"SELECT cq.*, u.username, g.name AS game_name FROM cloud_queue cq
@@ -425,6 +493,8 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
             await conn.ExecuteAsync(
                 "UPDATE cloud_sessions SET status='force_ended', ended_at=NOW(), duration_mins=@dur WHERE session_id=@id",
                 new { dur = duration, id });
+            if (s.server_id != null)
+                await cloudServers.EnqueueStopJobAsync(conn, (int)s.session_id, (int)s.server_id, (int)s.game_id);
             if ((string)s.plan == "free") await sessions.PromoteQueueAsync(conn);
             return Ok(new { message = "Session force-ended" });
         }
@@ -448,5 +518,5 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
 
     public record SubscribeRequest(string Plan);
     public record QueueJoinRequest(int GameId);
-    public record SessionStartRequest(int GameId, string? BillingMode);
+    public record SessionStartRequest(int GameId, string? BillingMode, int? ServerId, string? ServerPassword);
 }

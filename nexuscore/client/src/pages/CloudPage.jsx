@@ -7,6 +7,8 @@ import { useToast } from '../components/Toast';
 import QueueChat from '../components/QueueChat';
 import CloudPlayer from '../components/CloudPlayer';
 import CloudStreamSettings, { getPlanStreamLimits } from '../components/CloudStreamSettings';
+import ServerPicker, { ServerConnectModal, getPreferredServerId } from '../components/ServerPicker';
+import Modal from '../components/Modal';
 
 const PLAN_LABELS = {
   free: 'Free',
@@ -20,6 +22,13 @@ export default function CloudPage() {
   const [quality, setQuality] = useState(() => localStorage.getItem('nc_stream_quality') || '1080p');
   const [fps, setFps] = useState(() => parseInt(localStorage.getItem('nc_stream_fps') || '60', 10));
   const [statsLocked, setStatsLocked] = useState(() => localStorage.getItem('nc_stats_locked') === 'true');
+  const [preferredServerId, setPreferredServerIdState] = useState(() => {
+    const v = localStorage.getItem('nc_preferred_server_id');
+    return v ? parseInt(v, 10) : null;
+  });
+  const [streamServerOpen, setStreamServerOpen] = useState(false);
+  const [connectServer, setConnectServer] = useState(null);
+  const [pendingStream, setPendingStream] = useState(null);
   const [lobbyChatId, setLobbyChatId] = useState(1);
   const [queueChatId, setQueueChatId] = useState(null);
   const { profile } = useAuth();
@@ -85,13 +94,21 @@ export default function CloudPage() {
     showToast('Left queue', 'success');
   };
 
-  const handleConnect = async () => {
-    if (!queue?.game_id) return;
+  const confirmStreamServer = async (server, password) => {
+    setStreamServerOpen(false);
+    if (!server || !pendingStream?.gameId) return;
     try {
-      await startSession(queue.game_id, 'free');
+      await startSession(pendingStream.gameId, pendingStream.billingMode || 'free', server.server_id, password);
       setQueue(null);
+      setPendingStream(null);
       showToast('Session started!', 'success');
     } catch (err) { showToast(err.message, 'error'); }
+  };
+
+  const handleConnect = async () => {
+    if (!queue?.game_id) return;
+    setPendingStream({ billingMode: 'free', gameId: queue.game_id });
+    setStreamServerOpen(true);
   };
 
   const toggleStatsLock = () => setStatsLocked(v => !v);
@@ -169,9 +186,33 @@ export default function CloudPage() {
             onQualityChange={setQuality}
             onFpsChange={setFps}
             onToggleStatsLock={toggleStatsLock}
+            preferredServerId={preferredServerId}
+            onPreferredServerChange={(id) => {
+              setPreferredServerIdState(id);
+              localStorage.setItem('nc_preferred_server_id', String(id));
+            }}
           />
         </aside>
       </div>
+
+      <Modal open={streamServerOpen} onClose={() => { setStreamServerOpen(false); setPendingStream(null); }} title="Choose streaming server" wide>
+        <ServerPicker
+          gameId={pendingStream?.gameId}
+          selectedId={preferredServerId ?? getPreferredServerId()}
+          onSelect={(s) => {
+            if (s.requires_player_password || s.availability === 'password_required') {
+              setConnectServer(s);
+              setStreamServerOpen(false);
+            } else confirmStreamServer(s, null);
+          }}
+        />
+      </Modal>
+      <ServerConnectModal
+        open={!!connectServer}
+        onClose={() => setConnectServer(null)}
+        server={connectServer}
+        onConfirm={(pw) => { confirmStreamServer(connectServer, pw); setConnectServer(null); }}
+      />
     </div>
   );
 }

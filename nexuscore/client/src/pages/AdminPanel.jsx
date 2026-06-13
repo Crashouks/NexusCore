@@ -3,6 +3,7 @@ import { api } from '../api/api';
 import { useToast } from '../components/Toast';
 import Modal from '../components/Modal';
 import Icon from '../components/Icon';
+import { downloadAgentConfigFile, copyAgentSetup, getAgentApiUrl } from '../utils/agentConfig';
 
 const TABS = ['Dashboard', 'Users', 'Games', 'Storefront', 'Moderation', 'Cloud', 'Trials', 'Forums', 'Purchases'];
 
@@ -13,6 +14,8 @@ const STAT_LABELS = {
   dev_requests: 'Dev Requests',
   active_cloud_sessions: 'Live Streams',
   queue_waiting: 'Queue Waiting',
+  cloud_servers_online: 'Servers Online',
+  cloud_server_slots: 'Stream Slots',
   active_trials: 'Active Trials',
   trials_today: 'Trials Today',
   total_revenue: 'Store Revenue',
@@ -37,6 +40,9 @@ export default function AdminPanel() {
   const [pending, setPending] = useState([]);
   const [devRequests, setDevRequests] = useState([]);
   const [cloudData, setCloudData] = useState({ sessions: [], queue: [] });
+  const [cloudServers, setCloudServers] = useState({ servers: [], capacity: 0, active_sessions: 0, available_slots: 0 });
+  const [editServer, setEditServer] = useState(null);
+  const [serverGameDraft, setServerGameDraft] = useState([]);
   const [trialData, setTrialData] = useState({ trials: [], stats: {} });
   const [purchases, setPurchases] = useState([]);
   const [forums, setForums] = useState([]);
@@ -74,6 +80,7 @@ export default function AdminPanel() {
         api.games.pending(),
         api.admin.devRequests(),
         api.cloud.sessionsAll(),
+        api.admin.cloudServers(),
         api.trials.all(),
         api.admin.purchases(),
         api.admin.forums(),
@@ -93,9 +100,10 @@ export default function AdminPanel() {
       setPending(pick(3, []));
       setDevRequests(pick(4, []));
       setCloudData(pick(5, { sessions: [], queue: [] }));
-      setTrialData(pick(6, { trials: [], stats: {} }));
-      setPurchases(pick(7, []));
-      setForums(pick(8, []));
+      setCloudServers(pick(6, { servers: [], capacity: 0, active_sessions: 0, available_slots: 0 }));
+      setTrialData(pick(7, { trials: [], stats: {} }));
+      setPurchases(pick(8, []));
+      setForums(pick(9, []));
     } finally {
       setLoading(false);
     }
@@ -121,7 +129,55 @@ export default function AdminPanel() {
 
   const filteredGames = games.filter(g => gameFilter === 'all' || g.status === gameFilter);
 
+  const openNewServer = () => {
+    setServerGameDraft(
+      approvedGames.filter(g => g.cloud_enabled).map(g => ({
+        game_id: g.game_id,
+        name: g.name,
+        executable_path: '',
+      }))
+    );
+    setEditServer({
+      name: '', host: '', region: 'eu-central', gpu_model: 'RTX 4080',
+      max_slots: 1, server_tier: 'real', access_password: '', player_password: '', status: 'offline', notes: '',
+    });
+  };
+
+  const openEditServer = async (s) => {
+    try {
+      const data = await api.admin.cloudServerGames(s.server_id);
+      const byId = Object.fromEntries((data.mappings || []).map(m => [m.game_id, m.executable_path]));
+      setServerGameDraft(
+        approvedGames.filter(g => g.cloud_enabled).map(g => ({
+          game_id: g.game_id,
+          name: g.name,
+          executable_path: byId[g.game_id] || '',
+        }))
+      );
+      setEditServer({ ...s, access_password: '', player_password: '' });
+    } catch (err) {
+      showToast(err.message || 'Could not load game paths', 'error');
+    }
+  };
   const trialStats = trialData.stats || {};
+  const isAgentLive = (s) => s.last_heartbeat && (Date.now() - new Date(s.last_heartbeat).getTime()) < 90000;
+  const isRealServer = (s) => (s.server_tier || 'real') === 'real';
+
+  const handleDownloadAgentConfig = (server, passwordOverride) => {
+    const pwd = passwordOverride ?? '';
+    downloadAgentConfigFile(server.server_id, pwd);
+    showToast(`Downloaded config.json — save to nexuscore/agent/`, 'success');
+  };
+
+  const handleCopyAgentSetup = async (server, passwordOverride) => {
+    try {
+      await copyAgentSetup(server.server_id, server.name, passwordOverride ?? '');
+      showToast('Agent setup steps copied', 'success');
+    } catch {
+      showToast('Could not copy — use Download config instead', 'error');
+    }
+  };
+
   const convRate = trialStats.total > 0
     ? ((Number(trialStats.purchased || 0) / Number(trialStats.total)) * 100).toFixed(1)
     : 0;
@@ -405,6 +461,86 @@ export default function AdminPanel() {
 
       {tab === 5 && (
         <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 12 }}>
+            <div>
+              <h3 className="font-display" style={{ margin: 0 }}>Streaming Servers</h3>
+              <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: '6px 0 0' }}>
+                Register your gaming PC, map Unity builds, download agent config, then run{' '}
+                <code style={{ fontSize: 12 }}>start-all.bat</code> or{' '}
+                <code style={{ fontSize: 12 }}>nexuscore/agent/start-agent.bat</code>.
+              </p>
+            </div>
+            <button type="button" className="btn btn-primary" style={{ fontSize: 13 }} onClick={openNewServer}>
+              Add Machine
+            </button>
+          </div>
+
+          <div className="glass" style={{ padding: 16, marginBottom: 24, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+            <div><span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Capacity</span><p style={{ margin: 4, fontWeight: 700 }}>{cloudServers.capacity ?? 0} slots</p></div>
+            <div><span style={{ color: 'var(--text-muted)', fontSize: 12 }}>In use</span><p style={{ margin: 4, fontWeight: 700 }}>{cloudServers.active_sessions ?? 0}</p></div>
+            <div><span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Available</span><p style={{ margin: 4, fontWeight: 700, color: 'var(--neon)' }}>{cloudServers.available_slots ?? 0}</p></div>
+            <div><span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Registered</span><p style={{ margin: 4, fontWeight: 700 }}>{cloudServers.servers?.length ?? 0}</p></div>
+          </div>
+
+          <div className="card" style={{ overflow: 'auto', marginBottom: 32 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+                  {['Name', 'Host', 'Games', 'Slots', 'Password', 'Agent', 'Status', 'Actions'].map(h => (
+                    <th key={h} style={{ padding: '10px 12px', textAlign: 'left' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(cloudServers.servers || []).map(s => (
+                  <tr key={s.server_id} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <td style={{ padding: '10px 12px' }}>{s.name}</td>
+                    <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 12 }}>{s.host}</td>
+                    <td style={{ padding: '10px 12px' }}>{s.game_count ?? 0}</td>
+                    <td style={{ padding: '10px 12px' }}>{s.active_sessions ?? 0} / {s.max_slots}</td>
+                    <td style={{ padding: '10px 12px' }}>{s.has_password ? 'Yes' : 'None'}</td>
+                    <td style={{ padding: '10px 12px', color: isAgentLive(s) ? 'var(--neon)' : 'var(--text-muted)' }}>
+                      {isAgentLive(s) ? 'Connected' : 'Offline'}
+                    </td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <span style={{
+                        color: s.status === 'online' ? 'var(--neon)' : s.status === 'maintenance' ? 'var(--warning)' : 'var(--text-muted)',
+                        textTransform: 'capitalize',
+                      }}>{s.status}</span>
+                    </td>
+                    <td style={{ padding: '10px 12px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <button type="button" className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 12 }}
+                        onClick={() => openEditServer(s)}>Edit</button>
+                      {isRealServer(s) && (
+                        <button type="button" className="btn btn-primary" style={{ padding: '4px 8px', fontSize: 12 }}
+                          title="Download config.json for nexuscore/agent"
+                          onClick={() => handleDownloadAgentConfig(s)}>Agent</button>
+                      )}
+                      {s.status !== 'online' && (
+                        <button type="button" className="btn btn-success" style={{ padding: '4px 8px', fontSize: 12 }}
+                          onClick={() => runAction(() => api.admin.updateCloudServer(s.server_id, { status: 'online' }), `${s.name} is online`)}>Online</button>
+                      )}
+                      {s.status === 'online' && (
+                        <button type="button" className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 12 }}
+                          onClick={() => runAction(() => api.admin.updateCloudServer(s.server_id, { status: 'offline' }), `${s.name} is offline`)}>Offline</button>
+                      )}
+                      <button type="button" className="btn btn-danger" style={{ padding: '4px 8px', fontSize: 12 }}
+                        onClick={() => {
+                          if (!confirm(`Remove server "${s.name}"?`)) return;
+                          runAction(() => api.admin.deleteCloudServer(s.server_id), 'Server removed');
+                        }}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!cloudServers.servers?.length && (
+              <p style={{ color: 'var(--text-muted)', padding: 24, textAlign: 'center' }}>
+                No machines yet. Add your PC, map game .exe paths, then run the cloud agent.
+              </p>
+            )}
+          </div>
+
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
             <h3 className="font-display" style={{ margin: 0 }}>Active Cloud Sessions</h3>
             <button type="button" className="btn btn-danger" style={{ fontSize: 13 }}
@@ -417,7 +553,7 @@ export default function AdminPanel() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
-                  {['User', 'Game', 'Plan', 'Started', 'Status', 'Actions'].map(h => (
+                  {['User', 'Game', 'Plan', 'Server', 'Started', 'Status', 'Actions'].map(h => (
                     <th key={h} style={{ padding: '10px 12px', textAlign: 'left' }}>{h}</th>
                   ))}
                 </tr>
@@ -428,6 +564,7 @@ export default function AdminPanel() {
                     <td style={{ padding: '10px 12px' }}>{s.username}</td>
                     <td style={{ padding: '10px 12px' }}>{s.game_name}</td>
                     <td style={{ padding: '10px 12px' }}>{s.plan}</td>
+                    <td style={{ padding: '10px 12px' }}>{s.server_name || s.server_region || '—'}</td>
                     <td style={{ padding: '10px 12px' }}>{new Date(s.started_at).toLocaleString()}</td>
                     <td style={{ padding: '10px 12px' }}>{s.status}</td>
                     <td style={{ padding: '10px 12px' }}>
@@ -553,6 +690,192 @@ export default function AdminPanel() {
           {!purchases.length && <p style={{ color: 'var(--text-muted)', padding: 24, textAlign: 'center' }}>No purchases yet</p>}
         </div>
       )}
+
+      <Modal open={!!editServer} onClose={() => setEditServer(null)} title={editServer?.server_id ? `Edit Machine — ${editServer.name}` : 'Add Gaming PC'} wide>
+        {editServer && (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+              <div>
+                <label style={{ fontSize: 13, color: 'var(--text-muted)' }}>Display name</label>
+                <input value={editServer.name} onChange={e => setEditServer({ ...editServer, name: e.target.value })}
+                  placeholder="My Gaming PC"
+                  style={{ width: '100%', padding: 8, marginTop: 4, borderRadius: 'var(--radius)', background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 13, color: 'var(--text-muted)' }}>Host / IP (this PC)</label>
+                <input value={editServer.host} onChange={e => setEditServer({ ...editServer, host: e.target.value })}
+                  placeholder="192.168.1.50 or localhost"
+                  style={{ width: '100%', padding: 8, marginTop: 4, borderRadius: 'var(--radius)', background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+              <div>
+                <label style={{ fontSize: 13, color: 'var(--text-muted)' }}>Region label</label>
+                <input value={editServer.region || ''} onChange={e => setEditServer({ ...editServer, region: e.target.value })}
+                  placeholder="home"
+                  style={{ width: '100%', padding: 8, marginTop: 4, borderRadius: 'var(--radius)', background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 13, color: 'var(--text-muted)' }}>GPU</label>
+                <input value={editServer.gpu_model || ''} onChange={e => setEditServer({ ...editServer, gpu_model: e.target.value })}
+                  placeholder="RTX 3060"
+                  style={{ width: '100%', padding: 8, marginTop: 4, borderRadius: 'var(--radius)', background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 13, color: 'var(--text-muted)' }}>Max concurrent games</label>
+                <input type="number" min="1" value={editServer.max_slots ?? 1}
+                  onChange={e => setEditServer({ ...editServer, max_slots: parseInt(e.target.value, 10) || 1 })}
+                  style={{ width: '100%', padding: 8, marginTop: 4, borderRadius: 'var(--radius)', background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+              <div>
+                <label style={{ fontSize: 13, color: 'var(--text-muted)' }}>Server type</label>
+                <select value={editServer.server_tier || 'real'} onChange={e => setEditServer({ ...editServer, server_tier: e.target.value })}
+                  style={{ width: '100%', padding: 8, marginTop: 4, borderRadius: 'var(--radius)', background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text)' }}>
+                  <option value="free_fake">Free (fake datacenter)</option>
+                  <option value="paid_fake">Paid (fake datacenter)</option>
+                  <option value="real">Private PC (real stream)</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 13, color: 'var(--text-muted)' }}>Admin status</label>
+                <select value={editServer.status || 'offline'} onChange={e => setEditServer({ ...editServer, status: e.target.value })}
+                  style={{ width: '100%', padding: 8, marginTop: 4, borderRadius: 'var(--radius)', background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text)' }}>
+                  <option value="offline">offline</option>
+                  <option value="online">online</option>
+                  <option value="maintenance">maintenance (password unlock)</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                Agent password (optional)
+                {editServer.server_id && editServer.has_password ? ' — leave blank to keep' : ''}
+              </label>
+              <input type="password" value={editServer.access_password || ''} onChange={e => setEditServer({ ...editServer, access_password: e.target.value })}
+                placeholder="For nexuscore/agent/config.json"
+                style={{ width: '100%', padding: 8, marginTop: 4, borderRadius: 'var(--radius)', background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                Player password (optional)
+                {editServer.server_id && editServer.has_player_password ? ' — leave blank to keep' : ''}
+              </label>
+              <input type="password" value={editServer.player_password || ''} onChange={e => setEditServer({ ...editServer, player_password: e.target.value })}
+                placeholder="Users must enter this to connect"
+                style={{ width: '100%', padding: 8, marginTop: 4, borderRadius: 'var(--radius)', background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
+                Use for private PCs or maintenance servers. Leave empty for public fake servers.
+              </p>
+            </div>
+            {editServer.server_id && (
+              <p style={{ fontSize: 12, color: 'var(--neon)', marginBottom: 12 }}>
+                Agent server ID: <strong>{editServer.server_id}</strong>
+                {' · '}
+                API: <code style={{ fontSize: 11 }}>{getAgentApiUrl()}</code>
+              </p>
+            )}
+            {editServer.server_id && (editServer.server_tier || 'real') === 'real' && (
+              <div className="glass" style={{ padding: 14, marginBottom: 16 }}>
+                <h4 style={{ margin: '0 0 8px', fontSize: 14 }}>Agent setup on this PC</h4>
+                <ol style={{ margin: '0 0 12px', paddingLeft: 20, fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                  <li>Download <strong>config.json</strong> below (includes password if you typed one above).</li>
+                  <li>Save to <code style={{ fontSize: 11 }}>nexuscore/agent/config.json</code></li>
+                  <li>Run <code style={{ fontSize: 11 }}>start-all.bat</code> (app + agent) or <code style={{ fontSize: 11 }}>nexuscore/agent/start-agent.bat</code></li>
+                  <li>Status here should show <strong style={{ color: 'var(--neon)' }}>Agent: Connected</strong></li>
+                </ol>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button type="button" className="btn btn-primary" style={{ fontSize: 13 }}
+                    onClick={() => handleDownloadAgentConfig(
+                      { server_id: editServer.server_id, name: editServer.name },
+                      editServer.access_password || '',
+                    )}>
+                    Download config.json
+                  </button>
+                  <button type="button" className="btn btn-ghost" style={{ fontSize: 13 }}
+                    onClick={() => handleCopyAgentSetup(
+                      { server_id: editServer.server_id, name: editServer.name },
+                      editServer.access_password || '',
+                    )}>
+                    Copy setup steps
+                  </button>
+                </div>
+              </div>
+            )}
+            <div style={{ marginBottom: 12, display: editServer.server_tier === 'real' ? 'block' : 'none' }}>
+              <h4 style={{ margin: '0 0 8px', fontSize: 14 }}>Unity / game executables on this PC</h4>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+              Full path to each cloud-enabled game build (.exe). Only mapped games can launch on this machine.
+            </p>
+            <div className="card" style={{ overflow: 'auto', maxHeight: 220, marginBottom: 16 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>Game</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>Executable path</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {serverGameDraft.map(g => (
+                    <tr key={g.game_id} style={{ borderBottom: '1px solid var(--border)' }}>
+                      <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{g.name}</td>
+                      <td style={{ padding: '8px 10px' }}>
+                        <input value={g.executable_path}
+                          onChange={e => setServerGameDraft(prev => prev.map(x => x.game_id === g.game_id ? { ...x, executable_path: e.target.value } : x))}
+                          placeholder="C:\Games\MyUnityGame\game.exe"
+                          style={{ width: '100%', padding: 6, borderRadius: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!serverGameDraft.length && (
+                <p style={{ padding: 16, color: 'var(--text-muted)', textAlign: 'center' }}>No cloud-enabled games — enable Cloud on a game first.</p>
+              )}
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 13, color: 'var(--text-muted)' }}>Notes (optional)</label>
+              <textarea value={editServer.notes || ''} onChange={e => setEditServer({ ...editServer, notes: e.target.value })}
+                rows={2}
+                style={{ width: '100%', padding: 8, marginTop: 4, borderRadius: 'var(--radius)', background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text)', resize: 'vertical' }} />
+            </div>
+            <button type="button" className="btn btn-primary" onClick={() => runAction(async () => {
+              const payload = {
+                name: editServer.name,
+                host: editServer.host,
+                region: editServer.region,
+                gpu_model: editServer.gpu_model,
+                max_slots: parseInt(editServer.max_slots, 10) || 1,
+                server_tier: editServer.server_tier || 'real',
+                status: editServer.status,
+                notes: editServer.notes || null,
+              };
+              if (editServer.access_password) payload.access_password = editServer.access_password;
+              else if (!editServer.server_id) payload.access_password = '';
+              if (editServer.player_password) payload.player_password = editServer.player_password;
+              else if (!editServer.server_id) payload.player_password = '';
+
+              let serverId = editServer.server_id;
+              if (serverId) {
+                await api.admin.updateCloudServer(serverId, payload);
+              } else {
+                payload.access_password = editServer.access_password || '';
+                payload.player_password = editServer.player_password || '';
+                const created = await api.admin.createCloudServer(payload);
+                serverId = created.server_id;
+              }
+              const mappings = editServer.server_tier === 'real'
+                ? serverGameDraft.filter(g => g.executable_path?.trim()).map(g => ({ game_id: g.game_id, executable_path: g.executable_path.trim() }))
+                : [];
+              await api.admin.setCloudServerGames(serverId, mappings);
+              setEditServer(null);
+            }, editServer.server_id ? 'Machine updated' : 'Machine added')}>
+              {editServer.server_id ? 'Save Changes' : 'Add Machine'}
+            </button>
+          </>
+        )}
+      </Modal>
 
       <Modal open={!!editGame} onClose={() => setEditGame(null)} title="Edit Game" wide>
         {editGame && (

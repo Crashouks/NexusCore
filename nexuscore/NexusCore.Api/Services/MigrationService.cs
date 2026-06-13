@@ -2,7 +2,7 @@ using Dapper;
 
 namespace NexusCore.Api.Services;
 
-public class MigrationService(DbService db, ChatService chat, ForumService forum, NotificationService notifications)
+public class MigrationService(DbService db, ChatService chat, ForumService forum, NotificationService notifications, CloudServerService cloudServers)
 {
     private static readonly string[] Migrations =
     [
@@ -47,5 +47,6 @@ public class MigrationService(DbService db, ChatService chat, ForumService forum
         await chat.EnsureChatSchemaAsync();
         await forum.EnsureForumSchemaAsync();
         await notifications.EnsureSchemaAsync();
+        await cloudServers.EnsureSchemaAsync(conn);
     }
 }

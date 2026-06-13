@@ -1,0 +1,6 @@
+{
+  "apiUrl": "http://localhost:5000/api",
+  "serverId": 1,
+  "password": "",
+  "pollIntervalMs": 3000
+}

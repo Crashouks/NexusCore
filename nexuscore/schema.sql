@@ -152,10 +152,55 @@ CREATE TABLE IF NOT EXISTS cloud_sessions (
   max_duration_mins INT NOT NULL,
   status        ENUM('active','ended','expired','force_ended') DEFAULT 'active',
   stream_token  VARCHAR(255),
+  server_id     INT DEFAULT NULL,
   server_region VARCHAR(50) DEFAULT 'eu-central',
+  is_real_stream BOOLEAN NOT NULL DEFAULT FALSE,
   stream_quality VARCHAR(10) DEFAULT '1080p',
   FOREIGN KEY (user_id) REFERENCES users(user_id),
   FOREIGN KEY (game_id) REFERENCES games(game_id)
+);
+
+CREATE TABLE IF NOT EXISTS cloud_servers (
+  server_id        INT PRIMARY KEY AUTO_INCREMENT,
+  name             VARCHAR(100) NOT NULL,
+  host             VARCHAR(255) NOT NULL,
+  region           VARCHAR(50) NOT NULL DEFAULT 'eu-central',
+  gpu_model        VARCHAR(100) DEFAULT 'RTX 4080',
+  max_slots        INT NOT NULL DEFAULT 1,
+  account_username VARCHAR(100) NOT NULL DEFAULT '',
+  account_secret   VARCHAR(255) NOT NULL DEFAULT '',
+  access_password_hash VARCHAR(255) DEFAULT NULL,
+  player_password_hash VARCHAR(255) DEFAULT NULL,
+  server_tier ENUM('free_fake','paid_fake','real') NOT NULL DEFAULT 'real',
+  status           ENUM('online','offline','maintenance') NOT NULL DEFAULT 'offline',
+  notes            TEXT,
+  created_at       DATETIME DEFAULT NOW(),
+  last_heartbeat   DATETIME DEFAULT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cloud_server_games (
+  server_id INT NOT NULL,
+  game_id INT NOT NULL,
+  executable_path VARCHAR(512) NOT NULL,
+  PRIMARY KEY (server_id, game_id),
+  FOREIGN KEY (server_id) REFERENCES cloud_servers(server_id) ON DELETE CASCADE,
+  FOREIGN KEY (game_id) REFERENCES games(game_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS cloud_agent_jobs (
+  job_id INT PRIMARY KEY AUTO_INCREMENT,
+  session_id INT NOT NULL,
+  server_id INT NOT NULL,
+  game_id INT NOT NULL,
+  job_type ENUM('launch','stop') NOT NULL,
+  executable_path VARCHAR(512) DEFAULT NULL,
+  status ENUM('pending','running','done','failed','cancelled') NOT NULL DEFAULT 'pending',
+  error_message VARCHAR(500) DEFAULT NULL,
+  created_at DATETIME DEFAULT NOW(),
+  processed_at DATETIME DEFAULT NULL,
+  FOREIGN KEY (session_id) REFERENCES cloud_sessions(session_id) ON DELETE CASCADE,
+  FOREIGN KEY (server_id) REFERENCES cloud_servers(server_id) ON DELETE CASCADE,
+  FOREIGN KEY (game_id) REFERENCES games(game_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS cart_items (
