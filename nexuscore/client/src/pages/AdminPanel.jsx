@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { api } from '../api/api';
 import { useToast } from '../components/Toast';
 import Modal from '../components/Modal';
+import ExePathInput from '../components/ExePathInput';
 import Icon from '../components/Icon';
 import { downloadAgentConfigFile, copyAgentSetup, getAgentApiUrl } from '../utils/agentConfig';
 
@@ -57,6 +58,7 @@ export default function AdminPanel() {
   const [editUser, setEditUser] = useState(null);
   const [carouselDraft, setCarouselDraft] = useState([]);
   const [loadError, setLoadError] = useState(null);
+  const [browseGameBusy, setBrowseGameBusy] = useState(false);
   const { showToast } = useToast();
 
   const approvedGames = useMemo(() => games.filter(g => g.status === 'approved'), [games]);
@@ -102,6 +104,23 @@ export default function AdminPanel() {
     await api.admin.setCloudServerGames(server.server_id, mappings);
     return mappings.length;
   }, [draftToMappings]);
+
+  const applyExecutableToDraft = useCallback((setDraft, result) => {
+    setDraft(prev => {
+      const hit = prev.find(g => g.game_id === result.game_id);
+      if (hit) {
+        return prev.map(g => (g.game_id === result.game_id
+          ? { ...g, enabled: true, executable_path: result.executable_path }
+          : g));
+      }
+      return [...prev, {
+        game_id: result.game_id,
+        name: result.name,
+        enabled: true,
+        executable_path: result.executable_path,
+      }];
+    });
+  }, []);
 
   useEffect(() => {
     setCarouselDraft(
@@ -157,6 +176,27 @@ export default function AdminPanel() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const browseAndAddGame = useCallback(async (setDraft) => {
+    setBrowseGameBusy(true);
+    try {
+      const pick = await api.admin.browseExecutable();
+      if (pick.cancelled || !pick.path) return;
+      const result = await api.admin.quickCloudGame({ executable_path: pick.path });
+      if (result.created) await load();
+      applyExecutableToDraft(setDraft, result);
+      showToast(
+        result.created
+          ? `Added "${result.name}" to the store and this server`
+          : `Linked "${result.name}" with ${pick.path}`,
+        'success',
+      );
+    } catch (err) {
+      showToast(err.message || 'Could not add game', 'error');
+    } finally {
+      setBrowseGameBusy(false);
+    }
+  }, [applyExecutableToDraft, load, showToast]);
 
   const loadCloudDiagnostics = useCallback(async () => {
     try {
@@ -833,7 +873,15 @@ export default function AdminPanel() {
         </div>
       )}
 
-      <Modal open={!!editServer} onClose={() => setEditServer(null)} title={editServer?.server_id ? `Edit Machine — ${editServer.name}` : 'Add Gaming PC'} wide>
+      <Modal
+        open={!!editServer}
+        onClose={() => setEditServer(null)}
+        title={editServer?.server_id ? `Edit Machine — ${editServer.name}` : 'Add Gaming PC'}
+        wide
+        closeOnBackdrop={false}
+        closeOnEscape={false}
+        showCloseButton
+      >
         {editServer && (
           <>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
@@ -954,9 +1002,20 @@ export default function AdminPanel() {
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
               Check which cloud games this server can stream.
               {(editServer.server_tier || 'real') === 'real'
-                ? ' Real machines need the .exe path for each selected game.'
+                ? ' Use Browse to pick a .exe on this PC — no cover URL needed.'
                 : ' Fake/datacenter servers only need checkboxes — no .exe path.'}
             </p>
+            {(editServer.server_tier || 'real') === 'real' && (
+              <button
+                type="button"
+                className="btn btn-neon btn-sm"
+                style={{ marginBottom: 10 }}
+                disabled={browseGameBusy}
+                onClick={() => browseAndAddGame(setServerGameDraft)}
+              >
+                {browseGameBusy ? 'Opening file picker…' : 'Browse & add game (.exe)'}
+              </button>
+            )}
             <div className="card" style={{ overflow: 'auto', maxHeight: 260, marginBottom: 16 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
@@ -977,11 +1036,12 @@ export default function AdminPanel() {
                       </td>
                       <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{g.name}</td>
                       {(editServer.server_tier || 'real') === 'real' && (
-                        <td style={{ padding: '8px 10px' }}>
-                          <input value={g.executable_path} disabled={!g.enabled}
-                            onChange={e => setServerGameDraft(prev => prev.map(x => x.game_id === g.game_id ? { ...x, executable_path: e.target.value } : x))}
-                            placeholder="C:\Games\MyGame\game.exe"
-                            style={{ width: '100%', padding: 6, borderRadius: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+                        <td style={{ padding: '8px 10px', minWidth: 220 }}>
+                          <ExePathInput
+                            value={g.executable_path}
+                            disabled={!g.enabled}
+                            onChange={path => setServerGameDraft(prev => prev.map(x => x.game_id === g.game_id ? { ...x, executable_path: path } : x))}
+                          />
                         </td>
                       )}
                     </tr>
@@ -1067,9 +1127,20 @@ export default function AdminPanel() {
             <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
               Choose which cloud games <strong>{manageGamesServer.name}</strong> can provide when players pick a server.
               {isRealServer(manageGamesServer)
-                ? ' Real PC servers need the .exe path for each checked game.'
+                ? ' Browse for .exe files on this PC or use Browse on each row.'
                 : ' Datacenter/fake servers only need checkboxes.'}
             </p>
+            {isRealServer(manageGamesServer) && (
+              <button
+                type="button"
+                className="btn btn-neon btn-sm"
+                style={{ marginBottom: 10 }}
+                disabled={browseGameBusy}
+                onClick={() => browseAndAddGame(setGamesModalDraft)}
+              >
+                {browseGameBusy ? 'Opening file picker…' : 'Browse & add game (.exe)'}
+              </button>
+            )}
             <div className="card" style={{ overflow: 'auto', maxHeight: 360, marginBottom: 16 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
@@ -1090,11 +1161,12 @@ export default function AdminPanel() {
                       </td>
                       <td style={{ padding: '8px 10px' }}>{g.name}</td>
                       {isRealServer(manageGamesServer) && (
-                        <td style={{ padding: '8px 10px' }}>
-                          <input value={g.executable_path} disabled={!g.enabled}
-                            onChange={e => setGamesModalDraft(prev => prev.map(x => x.game_id === g.game_id ? { ...x, executable_path: e.target.value } : x))}
-                            placeholder="C:\Games\MyGame\game.exe"
-                            style={{ width: '100%', padding: 6, borderRadius: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+                        <td style={{ padding: '8px 10px', minWidth: 220 }}>
+                          <ExePathInput
+                            value={g.executable_path}
+                            disabled={!g.enabled}
+                            onChange={path => setGamesModalDraft(prev => prev.map(x => x.game_id === g.game_id ? { ...x, executable_path: path } : x))}
+                          />
                         </td>
                       )}
                     </tr>

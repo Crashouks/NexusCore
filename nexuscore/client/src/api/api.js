@@ -92,15 +92,21 @@ export const api = {
     queueStatus: () => api.get('/cloud/queue/status'),
     queueJoin: (gameId) => api.post('/cloud/queue/join', { game_id: gameId }),
     queueLeave: () => api.post('/cloud/queue/leave'),
-    sessionStart: (gameId, billingMode, serverId, serverPassword) => api.post('/cloud/session/start', {
+    sessionStart: (gameId, billingMode, serverId, serverPassword, allowSpectators) => api.post('/cloud/session/start', {
       game_id: gameId,
       billing_mode: billingMode,
       server_id: serverId,
       server_password: serverPassword || null,
+      allow_spectators: !!allowSpectators,
     }),
     sessionEnd: () => api.post('/cloud/session/end'),
     sessionHeartbeat: () => api.post('/cloud/session/heartbeat'),
     sessionActive: () => api.get('/cloud/session/active'),
+    updateSessionPrivacy: (sessionId, allowSpectators) => api.patch('/cloud/session/privacy', {
+      session_id: sessionId,
+      allow_spectators: !!allowSpectators,
+    }),
+    liveStreams: () => api.get('/cloud/streams/live'),
     sessionHistory: (page = 1) => api.get(`/cloud/session/history?page=${page}`),
     sessionsAll: () => api.get('/cloud/sessions/all'),
     forceEnd: (id) => api.post(`/cloud/sessions/${id}/force-end`),
@@ -183,5 +189,7 @@ export const api = {
     devRequests: () => api.get('/users/developer-requests'),
     approveDev: (id) => api.post(`/users/approve-developer/${id}`),
     rejectDev: (id) => api.post(`/users/reject-developer/${id}`),
+    browseExecutable: () => api.post('/admin/browse-executable'),
+    quickCloudGame: (data) => api.post('/admin/games/quick-cloud', data),
   },
 };

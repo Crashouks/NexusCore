@@ -17,6 +17,7 @@ builder.Services.AddSingleton<JwtTokenService>();
 builder.Services.AddSingleton<SessionExpiryService>();
 builder.Services.AddSingleton<CloudServerService>();
 builder.Services.AddSingleton<CloudDiagnosticsLog>();
+builder.Services.AddSingleton<StreamPrivacyService>();
 builder.Services.AddSingleton<ChatService>();
 builder.Services.AddSingleton<ForumService>();
 builder.Services.AddSingleton<NotificationService>();

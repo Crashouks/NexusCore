@@ -7,6 +7,7 @@ import { useToast } from '../components/Toast';
 import QueueChat from '../components/QueueChat';
 import CloudPlayer from '../components/CloudPlayer';
 import CloudStreamSettings, { getPlanStreamLimits } from '../components/CloudStreamSettings';
+import LiveStreamsPanel from '../components/LiveStreamsPanel';
 import ServerPicker, { ServerConnectModal, getPreferredServerId } from '../components/ServerPicker';
 import Modal from '../components/Modal';
 
@@ -31,6 +32,10 @@ export default function CloudPage() {
   const [pendingStream, setPendingStream] = useState(null);
   const [lobbyChatId, setLobbyChatId] = useState(1);
   const [queueChatId, setQueueChatId] = useState(null);
+  const [watchTarget, setWatchTarget] = useState(null);
+  const [allowSpectators, setAllowSpectators] = useState(
+    () => localStorage.getItem('nc_allow_spectators') === 'true',
+  );
   const { profile } = useAuth();
   const { session, queue, endSession, refreshSession, refreshQueue, startSession, setQueue } = useCloud();
   const { showToast } = useToast();
@@ -38,6 +43,16 @@ export default function CloudPage() {
   const currentPlan = profile?.cloud_plan || 'free';
   const planLabel = PLAN_LABELS[currentPlan] || currentPlan;
   const limits = getPlanStreamLimits(currentPlan);
+
+  useEffect(() => {
+    if (session?.allow_spectators != null) {
+      setAllowSpectators(!!session.allow_spectators);
+    }
+  }, [session?.session_id, session?.allow_spectators]);
+
+  useEffect(() => {
+    if (session) setWatchTarget(null);
+  }, [session]);
 
   useEffect(() => { refreshSession(); refreshQueue(); }, [refreshSession, refreshQueue]);
   useEffect(() => { localStorage.setItem('nc_stream_quality', quality); }, [quality]);
@@ -103,7 +118,13 @@ export default function CloudPage() {
     setStreamServerOpen(false);
     if (!server || !pendingStream?.gameId) return;
     try {
-      await startSession(pendingStream.gameId, pendingStream.billingMode || 'free', server.server_id, password);
+      await startSession(
+        pendingStream.gameId,
+        pendingStream.billingMode || 'free',
+        server.server_id,
+        password,
+        allowSpectators,
+      );
       setQueue(null);
       setPendingStream(null);
       showToast('Session started!', 'success');
@@ -117,6 +138,20 @@ export default function CloudPage() {
   };
 
   const toggleStatsLock = () => setStatsLocked(v => !v);
+
+  const handleAllowSpectatorsChange = async (value) => {
+    setAllowSpectators(value);
+    localStorage.setItem('nc_allow_spectators', value ? 'true' : 'false');
+    if (session?.session_id) {
+      try {
+        await api.cloud.updateSessionPrivacy(session.session_id, value);
+        await refreshSession();
+        showToast(value ? 'Spectators can now watch your stream' : 'Stream is now private', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+  };
 
   const activeChatId = queue ? (queueChatId || lobbyChatId) : lobbyChatId;
   const activeChatTitle = queue && queueChatId ? 'Game Queue Chat' : 'GeForce NOW Queue Lobby';
@@ -137,6 +172,9 @@ export default function CloudPage() {
 
         <CloudPlayer
           session={session}
+          watchTarget={watchTarget}
+          onStopWatching={() => setWatchTarget(null)}
+          viewerQueue={queue}
           elapsed={elapsed}
           formatElapsed={formatElapsed}
           displayQuality={quality}
@@ -148,6 +186,13 @@ export default function CloudPage() {
           onGameClosed={handleGameClosed}
         />
       </section>
+
+      {!session && (
+        <LiveStreamsPanel
+          onWatch={setWatchTarget}
+          watchSessionId={watchTarget?.session_id}
+        />
+      )}
 
       {queue && (
         <section id="queue" style={{ marginBottom: 24 }}>
@@ -197,6 +242,9 @@ export default function CloudPage() {
               setPreferredServerIdState(id);
               localStorage.setItem('nc_preferred_server_id', String(id));
             }}
+            sessionActive={!!session}
+            allowSpectators={allowSpectators}
+            onAllowSpectatorsChange={handleAllowSpectatorsChange}
           />
         </aside>
       </div>

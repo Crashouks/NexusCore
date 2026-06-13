@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS cloud_sessions (
   server_id     INT DEFAULT NULL,
   server_region VARCHAR(50) DEFAULT 'eu-central',
   is_real_stream BOOLEAN NOT NULL DEFAULT FALSE,
+  allow_spectators BOOLEAN NOT NULL DEFAULT FALSE,
   stream_quality VARCHAR(10) DEFAULT '1080p',
   FOREIGN KEY (user_id) REFERENCES users(user_id),
   FOREIGN KEY (game_id) REFERENCES games(game_id)

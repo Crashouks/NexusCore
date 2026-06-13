@@ -25,6 +25,9 @@ export default function CloudStreamSettings({
   onToggleStatsLock,
   preferredServerId,
   onPreferredServerChange,
+  sessionActive,
+  allowSpectators,
+  onAllowSpectatorsChange,
 }) {
   const limits = getPlanStreamLimits(plan);
   const canChangeFps = limits.fps.length > 1;
@@ -92,6 +95,26 @@ export default function CloudStreamSettings({
         {!canChangeFps && (
           <p className="cloud-settings-hint">FPS options unlock on Pro and Ultimate RTX plans.</p>
         )}
+      </div>
+
+      <div className="cloud-settings-block cloud-settings-lock">
+        <div>
+          <label className="cloud-settings-label">Allow spectators</label>
+          <p className="cloud-settings-hint" style={{ marginTop: 4 }}>
+            {allowSpectators
+              ? 'Other users can watch your gameplay on the Live Now list.'
+              : 'Others see a black screen with queue info only — your gameplay stays private.'}
+          </p>
+        </div>
+        <button
+          type="button"
+          className={`btn ${allowSpectators ? 'btn-primary' : 'btn-ghost'} cloud-lock-btn`}
+          onClick={() => onAllowSpectatorsChange?.(!allowSpectators)}
+          title={allowSpectators ? 'Disable spectators' : 'Allow spectators'}
+        >
+          <Icon name={allowSpectators ? 'unlock' : 'lock'} size={16} />
+          {allowSpectators ? 'Public' : 'Private'}
+        </button>
       </div>
 
       <div className="cloud-settings-block cloud-settings-lock">

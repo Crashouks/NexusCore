@@ -2,15 +2,24 @@ using System.Security.Cryptography;
 using Dapper;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using NexusCore.Api.Extensions;
 using NexusCore.Api.Helpers;
+using NexusCore.Api.Hubs;
 using NexusCore.Api.Services;
 
 namespace NexusCore.Api.Controllers;
 
 [ApiController]
 [Route("api/cloud")]
-public class CloudController(DbService db, SessionExpiryService sessions, ChatService chat, CloudServerService cloudServers, CloudDiagnosticsLog diag) : ControllerBase
+public class CloudController(
+    DbService db,
+    SessionExpiryService sessions,
+    ChatService chat,
+    CloudServerService cloudServers,
+    CloudDiagnosticsLog diag,
+    StreamPrivacyService privacy,
+    IHubContext<CloudStreamHub> streamHub) : ControllerBase
 {
     private static readonly Dictionary<string, (string resolution, int fps, bool rayTracing)> PlanSpecs = new()
     {
@@ -334,11 +343,14 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
             }
 
             var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+            var allowSpectators = body.AllowSpectators == true;
             var sessionId = await conn.ExecuteScalarAsync<long>(
-                @"INSERT INTO cloud_sessions (user_id, game_id, plan, max_duration_mins, stream_token, server_id, server_region, is_real_stream, status)
-                  VALUES (@uid, @gid, @plan, @max, @token, @sid, @region, @real, 'active');
+                @"INSERT INTO cloud_sessions (user_id, game_id, plan, max_duration_mins, stream_token, server_id, server_region, is_real_stream, allow_spectators, status)
+                  VALUES (@uid, @gid, @plan, @max, @token, @sid, @region, @real, @allow, 'active');
                   SELECT LAST_INSERT_ID();",
-                new { uid = userId, gid = body.GameId, plan, max = maxDuration, token, sid = serverId, region, real = isRealStream });
+                new { uid = userId, gid = body.GameId, plan, max = maxDuration, token, sid = serverId, region, real = isRealStream, allow = allowSpectators });
+
+            privacy.SetCached((int)sessionId, allowSpectators);
 
             string? launchStatus = null;
             if (isRealStream && server.executable_path != null)
@@ -364,6 +376,7 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
                 fps = specs.fps,
                 rayTracing = specs.rayTracing,
                 maxDurationMins = maxDuration,
+                allowSpectators,
                 game = new { game_id = (int)game.game_id, name = (string)game.name, cover_url = game.cover_url }
             });
         }
@@ -389,6 +402,7 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
                 new { dur = duration, id = (int)s.session_id });
             if (s.server_id != null)
                 await cloudServers.EnqueueStopJobAsync(conn, (int)s.session_id, (int)s.server_id, (int)s.game_id);
+            privacy.Invalidate((int)s.session_id);
             if ((string)s.plan == "free") await sessions.PromoteQueueAsync(conn);
             return Ok(new { message = "Session ended", durationMins = duration });
         }
@@ -461,9 +475,123 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
             dict["rayTracing"] = specs.rayTracing;
             dict["minutesRemaining"] = minutesRemaining;
             dict["is_real_stream"] = DbValue.IsTrue(s.is_real_stream);
+            dict["allow_spectators"] = DbValue.IsTrue(s.allow_spectators);
             return Ok(dict);
         }
         catch (Exception ex) { return ApiResults.Error(500, ex.Message, "SERVER_ERROR"); }
+    }
+
+    [HttpGet("streams/live")]
+    [Authorize]
+    public async Task<IActionResult> LiveStreams()
+    {
+        try
+        {
+            var userId = User.GetUserId();
+            await using var conn = db.CreateConnection();
+            await conn.OpenAsync();
+
+            var rows = (await conn.QueryAsync<dynamic>(@"
+                SELECT cs.session_id, cs.user_id, cs.allow_spectators, cs.is_real_stream, cs.started_at,
+                       u.username, g.name AS game_name, g.cover_url,
+                       s.name AS server_name, s.region AS server_region
+                FROM cloud_sessions cs
+                JOIN users u ON cs.user_id=u.user_id
+                JOIN games g ON cs.game_id=g.game_id
+                LEFT JOIN cloud_servers s ON cs.server_id=s.server_id
+                WHERE cs.status='active'
+                ORDER BY cs.started_at DESC
+                LIMIT 24")).ToList();
+
+            var viewerQueue = await GetViewerQueueSnapshotAsync(conn, userId);
+            var streams = rows.Select(row =>
+            {
+                var isOwn = (int)row.user_id == userId;
+                var allow = DbValue.IsTrue(row.allow_spectators);
+                var canView = isOwn || allow;
+                return new
+                {
+                    session_id = (int)row.session_id,
+                    is_own = isOwn,
+                    allow_spectators = allow,
+                    can_view = canView,
+                    is_real_stream = DbValue.IsTrue(row.is_real_stream),
+                    server_name = row.server_name as string,
+                    server_region = row.server_region as string,
+                    player_username = isOwn ? row.username as string : MaskUsername(row.username as string),
+                    game_name = canView ? row.game_name as string : null,
+                    cover_url = canView ? row.cover_url as string : null,
+                    started_at = row.started_at,
+                };
+            });
+
+            return Ok(new { streams, viewer_queue = viewerQueue });
+        }
+        catch (Exception ex) { return ApiResults.Error(500, ex.Message, "SERVER_ERROR"); }
+    }
+
+    [HttpPatch("session/privacy")]
+    [Authorize]
+    public async Task<IActionResult> UpdateSessionPrivacy([FromBody] SessionPrivacyRequest body)
+    {
+        try
+        {
+            var userId = User.GetUserId();
+            await using var conn = db.CreateConnection();
+            await conn.OpenAsync();
+            var row = await conn.QueryFirstOrDefaultAsync<dynamic>(@"
+                SELECT cs.session_id, cs.allow_spectators, cs.is_real_stream,
+                       g.name AS game_name, g.cover_url,
+                       s.name AS server_name, s.region AS server_region
+                FROM cloud_sessions cs
+                JOIN games g ON cs.game_id=g.game_id
+                LEFT JOIN cloud_servers s ON cs.server_id=s.server_id
+                WHERE cs.session_id=@sid AND cs.user_id=@uid AND cs.status='active'",
+                new { sid = body.SessionId, uid = userId });
+            if (row == null)
+                return ApiResults.Error(404, "No active session", "NOT_FOUND");
+
+            var allow = body.AllowSpectators == true;
+            await conn.ExecuteAsync(
+                "UPDATE cloud_sessions SET allow_spectators=@allow WHERE session_id=@id",
+                new { allow, id = body.SessionId });
+            privacy.SetCached(body.SessionId, allow);
+
+            await streamHub.Clients.Group(StreamGroups.Spectator(body.SessionId)).SendAsync("WatchPrivacyChanged", new
+            {
+                session_id = body.SessionId,
+                allow_spectators = allow,
+                can_view = allow,
+                game_name = allow ? row.game_name as string : null,
+                cover_url = allow ? row.cover_url as string : null,
+            });
+
+            return Ok(new { allow_spectators = allow });
+        }
+        catch (Exception ex) { return ApiResults.Error(500, ex.Message, "SERVER_ERROR"); }
+    }
+
+    private static async Task<object> GetViewerQueueSnapshotAsync(MySqlConnector.MySqlConnection conn, int userId)
+    {
+        var entry = await conn.QueryFirstOrDefaultAsync<dynamic>(
+            "SELECT status, joined_at FROM cloud_queue WHERE user_id=@uid", new { uid = userId });
+        if (entry == null)
+            return new { in_queue = false, position = (int?)null, estimated_wait_mins = (int?)null };
+
+        if ((string)entry.status == "ready")
+            return new { in_queue = true, position = 0, estimated_wait_mins = 0 };
+
+        var pos = await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*)+1 FROM cloud_queue WHERE status='waiting' AND joined_at < @joined",
+            new { joined = entry.joined_at });
+        return new { in_queue = true, position = pos, estimated_wait_mins = pos * 4 };
+    }
+
+    private static string? MaskUsername(string? username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return "Player";
+        if (username.Length <= 2) return username[0] + "*";
+        return username[0] + new string('*', Math.Min(username.Length - 2, 6)) + username[^1];
     }
 
     [HttpGet("session/history")]
@@ -554,5 +682,6 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
 
     public record SubscribeRequest(string Plan);
     public record QueueJoinRequest(int GameId);
-    public record SessionStartRequest(int GameId, string? BillingMode, int? ServerId, string? ServerPassword);
+    public record SessionStartRequest(int GameId, string? BillingMode, int? ServerId, string? ServerPassword, bool? AllowSpectators);
+    public record SessionPrivacyRequest(int SessionId, bool? AllowSpectators);
 }

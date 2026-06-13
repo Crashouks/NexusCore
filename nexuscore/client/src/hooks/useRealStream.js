@@ -30,18 +30,72 @@ function resolveVk(e) {
   return null;
 }
 
+/** Map pointer position to stream pixels (handles letterboxing from object-fit: contain). */
+function getStreamDisplayRect(containerRect, streamW, streamH) {
+  const cw = containerRect.width;
+  const ch = containerRect.height;
+  if (!cw || !ch || !streamW || !streamH) {
+    return {
+      left: containerRect.left,
+      top: containerRect.top,
+      width: cw,
+      height: ch,
+    };
+  }
+  const contentAspect = streamW / streamH;
+  const containerAspect = cw / ch;
+  let dw;
+  let dh;
+  if (containerAspect > contentAspect) {
+    dh = ch;
+    dw = ch * contentAspect;
+  } else {
+    dw = cw;
+    dh = cw / contentAspect;
+  }
+  return {
+    left: containerRect.left + (cw - dw) / 2,
+    top: containerRect.top + (ch - dh) / 2,
+    width: dw,
+    height: dh,
+  };
+}
+
+function clientToStream(clientX, clientY, containerEl, streamW, streamH) {
+  const containerRect = containerEl.getBoundingClientRect();
+  const display = getStreamDisplayRect(containerRect, streamW, streamH);
+  const nx = (clientX - display.left) / display.width;
+  const ny = (clientY - display.top) / display.height;
+  if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return null;
+  return {
+    x: Math.max(0, Math.min(streamW - 1, Math.round(nx * streamW))),
+    y: Math.max(0, Math.min(streamH - 1, Math.round(ny * streamH))),
+  };
+}
+
 export function useRealStream(session, enabled, onSessionEnded) {
   const connRef = useRef(null);
   const canvasRef = useRef(null);
   const imgRef = useRef(new Image());
   const [streamStatus, setStreamStatus] = useState('idle');
   const [streamError, setStreamError] = useState(null);
+  const [inputFocused, setInputFocused] = useState(false);
+  const [pointerLocked, setPointerLocked] = useState(false);
+  const inputFocusedRef = useRef(false);
   const lastMoveAt = useRef(0);
+  const pointerStateRef = useRef({ virtX: 0, virtY: 0, ready: false });
+
+  const setFocused = useCallback((value) => {
+    inputFocusedRef.current = value;
+    setInputFocused(value);
+  }, []);
 
   useEffect(() => {
     if (!enabled || !session?.session_id) {
       setStreamStatus('idle');
       setStreamError(null);
+      setFocused(false);
+      setPointerLocked(false);
       return;
     }
 
@@ -118,41 +172,139 @@ export function useRealStream(session, enabled, onSessionEnded) {
 
   const bindViewport = useCallback((el) => {
     if (!el || !enabled) return () => {};
-    const rect = () => el.getBoundingClientRect();
-    const scale = (clientX, clientY) => {
-      const r = rect();
+
+    const pointerState = pointerStateRef.current;
+    const canvasSize = () => {
       const canvas = canvasRef.current;
-      const w = canvas?.width || 1920;
-      const h = canvas?.height || 1080;
-      const x = Math.max(0, Math.min(w - 1, Math.round(((clientX - r.left) / r.width) * w)));
-      const y = Math.max(0, Math.min(h - 1, Math.round(((clientY - r.top) / r.height) * h)));
-      return { x, y };
+      return { w: canvas?.width || 1920, h: canvas?.height || 1080 };
+    };
+
+    const coordsFromClient = (clientX, clientY) => {
+      const { w, h } = canvasSize();
+      return clientToStream(clientX, clientY, el, w, h);
+    };
+
+    const virtCoords = () => {
+      const { w, h } = canvasSize();
+      pointerState.virtX = Math.max(0, Math.min(w - 1, pointerState.virtX));
+      pointerState.virtY = Math.max(0, Math.min(h - 1, pointerState.virtY));
+      return { x: Math.round(pointerState.virtX), y: Math.round(pointerState.virtY) };
+    };
+
+    const sendMoveFromClient = (clientX, clientY) => {
+      const pt = coordsFromClient(clientX, clientY);
+      if (!pt) return;
+      pointerState.virtX = pt.x;
+      pointerState.virtY = pt.y;
+      pointerState.ready = true;
+      sendInput({ type: 'move', x: pt.x, y: pt.y });
+    };
+
+    const tryPointerLock = () => {
+      if (document.pointerLockElement === el) return;
+      el.requestPointerLock?.().catch(() => {});
+    };
+
+    const onPointerLockChange = () => {
+      const locked = document.pointerLockElement === el;
+      setPointerLocked(locked);
+      el.classList.toggle('cloud-pointer-locked', locked);
+      if (locked) {
+        setFocused(true);
+        if (!pointerState.ready) {
+          const { w, h } = canvasSize();
+          pointerState.virtX = w / 2;
+          pointerState.virtY = h / 2;
+          pointerState.ready = true;
+          sendInput({ type: 'move', ...virtCoords() });
+        }
+      }
+    };
+
+    const onPointerLockError = () => {
+      setPointerLocked(false);
+      el.classList.remove('cloud-pointer-locked');
     };
 
     const onMove = (e) => {
       const now = Date.now();
-      if (now - lastMoveAt.current < 33) return;
+      if (now - lastMoveAt.current < 16) return;
       lastMoveAt.current = now;
-      const { x, y } = scale(e.clientX, e.clientY);
-      sendInput({ type: 'move', x, y });
+
+      if (document.pointerLockElement === el) {
+        const { w, h } = canvasSize();
+        if (!pointerState.ready) {
+          pointerState.virtX = w / 2;
+          pointerState.virtY = h / 2;
+          pointerState.ready = true;
+        }
+        pointerState.virtX += e.movementX;
+        pointerState.virtY += e.movementY;
+        sendInput({ type: 'move', ...virtCoords() });
+        return;
+      }
+
+      if (!inputFocusedRef.current) return;
+      sendMoveFromClient(e.clientX, e.clientY);
     };
+
     const onDown = (e) => {
+      if (e.button !== 0 && e.button !== 1 && e.button !== 2) return;
       e.preventDefault();
-      el.focus();
-      const { x, y } = scale(e.clientX, e.clientY);
-      sendInput({ type: 'mousedown', x, y, button: e.button === 2 ? 'right' : e.button === 1 ? 'middle' : 'left' });
+      e.stopPropagation();
+      el.focus({ preventScroll: true });
+      setFocused(true);
+      el.classList.add('cloud-input-focused');
+
+      const pt = coordsFromClient(e.clientX, e.clientY);
+      if (pt) {
+        pointerState.virtX = pt.x;
+        pointerState.virtY = pt.y;
+        pointerState.ready = true;
+        sendInput({
+          type: 'mousedown',
+          x: pt.x,
+          y: pt.y,
+          button: e.button === 2 ? 'right' : e.button === 1 ? 'middle' : 'left',
+        });
+      }
+
+      tryPointerLock();
     };
+
     const onUp = (e) => {
-      const { x, y } = scale(e.clientX, e.clientY);
-      sendInput({ type: 'mouseup', x, y, button: e.button === 2 ? 'right' : e.button === 1 ? 'middle' : 'left' });
+      const pt = document.pointerLockElement === el
+        ? virtCoords()
+        : coordsFromClient(e.clientX, e.clientY);
+      if (!pt) return;
+      sendInput({
+        type: 'mouseup',
+        x: pt.x,
+        y: pt.y,
+        button: e.button === 2 ? 'right' : e.button === 1 ? 'middle' : 'left',
+      });
     };
+
     const onKey = (e, down) => {
       if (['Tab', 'F5'].includes(e.key)) return;
       if (e.key === 'F11') return;
+      if (e.key === 'Escape') {
+        if (document.pointerLockElement === el) document.exitPointerLock?.();
+        setFocused(false);
+        el.classList.remove('cloud-input-focused', 'cloud-pointer-locked');
+        return;
+      }
+      if (!inputFocusedRef.current && document.activeElement !== el) return;
       e.preventDefault();
       const vk = resolveVk(e);
       if (!vk) return;
       sendInput({ type: down ? 'keydown' : 'keyup', code: e.code, key: e.key, vk });
+    };
+
+    const onBlur = () => {
+      if (document.pointerLockElement === el) return;
+      setFocused(false);
+      el.classList.remove('cloud-input-focused');
     };
 
     const onContextMenu = (e) => e.preventDefault();
@@ -165,6 +317,11 @@ export function useRealStream(session, enabled, onSessionEnded) {
     el.addEventListener('contextmenu', onContextMenu);
     el.addEventListener('keydown', onKeyDown);
     el.addEventListener('keyup', onKeyUp);
+    el.addEventListener('blur', onBlur);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('pointerlockchange', onPointerLockChange);
+    document.addEventListener('pointerlockerror', onPointerLockError);
+
     el.tabIndex = 0;
     el.style.outline = 'none';
 
@@ -175,8 +332,26 @@ export function useRealStream(session, enabled, onSessionEnded) {
       el.removeEventListener('contextmenu', onContextMenu);
       el.removeEventListener('keydown', onKeyDown);
       el.removeEventListener('keyup', onKeyUp);
+      el.removeEventListener('blur', onBlur);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointerlockchange', onPointerLockChange);
+      document.removeEventListener('pointerlockerror', onPointerLockError);
+      el.classList.remove('cloud-input-focused', 'cloud-pointer-locked');
+      setFocused(false);
+      setPointerLocked(false);
+      pointerState.ready = false;
+      if (document.pointerLockElement === el) {
+        document.exitPointerLock?.();
+      }
     };
-  }, [enabled, sendInput]);
+  }, [enabled, sendInput, setFocused]);
 
-  return { canvasRef, bindViewport, streamStatus, streamError };
+  return {
+    canvasRef,
+    bindViewport,
+    streamStatus,
+    streamError,
+    inputFocused,
+    pointerLocked,
+  };
 }

@@ -40,6 +40,8 @@ public class CloudServerService(DbService db, IConfiguration config)
         catch (MySqlException ex) when (ex.Number == 1060) { }
         try { await conn.ExecuteAsync("ALTER TABLE cloud_sessions ADD COLUMN is_real_stream BOOLEAN NOT NULL DEFAULT FALSE"); }
         catch (MySqlException ex) when (ex.Number == 1060) { }
+        try { await conn.ExecuteAsync("ALTER TABLE cloud_sessions ADD COLUMN allow_spectators BOOLEAN NOT NULL DEFAULT FALSE"); }
+        catch (MySqlException ex) when (ex.Number == 1060) { }
         try { await conn.ExecuteAsync("ALTER TABLE cloud_servers MODIFY account_username VARCHAR(100) NOT NULL DEFAULT ''"); }
         catch (MySqlException) { }
         try { await conn.ExecuteAsync("ALTER TABLE cloud_servers MODIFY account_secret VARCHAR(255) NOT NULL DEFAULT ''"); }

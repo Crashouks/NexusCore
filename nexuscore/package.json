@@ -10,8 +10,8 @@
     "server:network": "dotnet run --project NexusCore.Api --no-launch-profile --urls http://0.0.0.0:5000",
     "client": "cd client && npm run dev",
     "client:network": "cd client && npm run dev -- --host 0.0.0.0",
-    "dev": "concurrently -k -n api,web -c blue,green \"npm run server\" \"npm run client\"",
-    "dev:network": "concurrently -k -n api,web -c blue,green \"npm run server:network\" \"npm run client:network\"",
+    "dev": "concurrently -k -n api,web -c blue,green \"npm run server\" \"wait-on -t 120000 http://127.0.0.1:5000/swagger && npm run client\"",
+    "dev:network": "concurrently -k -n api,web -c blue,green \"npm run server:network\" \"wait-on -t 120000 http://127.0.0.1:5000/swagger && npm run client:network\"",
     "sync:network-env": "node scripts/sync-network-env.js --network",
     "start": "npm run dev"
   },

@@ -106,7 +106,13 @@ export default function GameDetail() {
           return;
         }
       }
-      await startSession(game.game_id, billingMode, server.server_id, password);
+      await startSession(
+        game.game_id,
+        billingMode,
+        server.server_id,
+        password,
+        localStorage.getItem('nc_allow_spectators') === 'true',
+      );
       navigate('/cloud');
     } catch (err) {
       if (err.code === 'QUEUE_REQUIRED') setQueueOpen(true);

@@ -699,7 +699,27 @@ input, textarea, select { font-family: var(--font-body); }
   height: 100%;
   object-fit: contain;
   display: block;
+  pointer-events: none;
+  position: relative;
+  z-index: 1;
 }
+.cloud-input-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  cursor: default;
+  background: transparent;
+}
+.cloud-input-layer.cloud-input-focused {
+  cursor: crosshair;
+}
+.cloud-input-layer.cloud-pointer-locked {
+  cursor: none;
+}
+.cloud-pointer-locked .cloud-input-layer {
+  cursor: none;
+}
+.cloud-cursor-hidden .cloud-player-viewport { cursor: none; }
 .cloud-player-backdrop {
   position: absolute; inset: 0;
   backdrop-filter: blur(12px) saturate(1.2);
@@ -714,7 +734,6 @@ input, textarea, select { font-family: var(--font-body); }
   pointer-events: auto;
 }
 .cloud-left-edge-zone.disabled { pointer-events: none; }
-.cloud-cursor-hidden .cloud-player-viewport { cursor: none; }
 .cloud-cursor-hidden-badge {
   position: absolute; bottom: 72px; left: 50%; transform: translateX(-50%);
   z-index: 6; font-size: 11px; color: var(--text-dim);
@@ -835,7 +854,14 @@ input, textarea, select { font-family: var(--font-body); }
   pointer-events: none;
 }
 .cloud-player-bottombar.visible {
-  opacity: 1; transform: translateY(0); pointer-events: auto;
+  opacity: 1; transform: translateY(0);
+  pointer-events: none;
+}
+.cloud-player-bottombar.visible .cloud-bottom-controls,
+.cloud-player-bottombar.visible .cloud-bottom-controls .cloud-ctrl-btn,
+.cloud-player-bottombar.visible .cloud-bottom-controls .cloud-end-btn,
+.cloud-player-bottombar.visible .cloud-idle-bar .cloud-ctrl-btn {
+  pointer-events: auto;
 }
 .cloud-bottom-left { display: flex; align-items: center; gap: 14px; }
 .cloud-quality-pill {
@@ -979,3 +1005,112 @@ input, textarea, select { font-family: var(--font-body); }
   .hero-actions { flex-direction: column; width: 100%; }
   .hero-actions .btn { width: 100%; max-width: 280px; }
 }
+
+.cloud-live-streams-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr));
+  gap: 14px;
+}
+.cloud-live-stream-card {
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+.cloud-live-stream-card.active {
+  border-color: var(--neon);
+  box-shadow: 0 0 0 1px rgba(118, 185, 0, 0.25);
+}
+.cloud-live-stream-preview {
+  aspect-ratio: 16 / 9;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+  margin-bottom: 10px;
+}
+.cloud-live-stream-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.cloud-live-stream-private {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.cloud-live-stream-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.cloud-live-stream-meta strong {
+  color: var(--text);
+  font-size: 14px;
+}
+.cloud-live-stream-game { color: var(--accent-glow); }
+.cloud-live-stream-private-hint { color: var(--text-dim); font-size: 11px; }
+
+.cloud-private-stream-gate {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+  background: #000;
+  color: var(--text-muted);
+}
+.cloud-private-stream-gate h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 22px;
+}
+.cloud-private-stream-gate p { margin: 0; max-width: 360px; line-height: 1.5; }
+.cloud-private-queue-box {
+  margin-top: 8px;
+  padding: 16px 24px;
+  border-radius: 12px;
+  border: 1px solid rgba(118, 185, 0, 0.25);
+  background: rgba(118, 185, 0, 0.08);
+}
+.cloud-private-queue-pos {
+  font-size: 42px;
+  color: var(--accent-glow);
+  margin: 0 0 4px;
+}
+.cloud-private-queue-ready {
+  font-size: 20px;
+  color: var(--neon);
+  margin: 0 0 4px;
+}
+.cloud-private-queue-wait {
+  color: var(--accent-glow);
+  font-weight: 600;
+  margin-top: 8px;
+}
+.cloud-private-queue-hint {
+  font-size: 13px;
+  max-width: 320px;
+}
+.cloud-watch-simulated {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  opacity: 0.35;
+  filter: blur(6px);
+}
+.cloud-player-viewport.cloud-watch-mode { background: #000 !important; }

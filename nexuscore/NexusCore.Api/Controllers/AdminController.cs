@@ -10,7 +10,11 @@ namespace NexusCore.Api.Controllers;
 [ApiController]
 [Route("api/admin")]
 [Authorize]
-public class AdminController(DbService db, CloudServerService cloudServers, CloudDiagnosticsLog diag) : ControllerBase
+public class AdminController(
+    DbService db,
+    CloudServerService cloudServers,
+    CloudDiagnosticsLog diag,
+    IWebHostEnvironment env) : ControllerBase
 {
     private bool IsAdmin => User.IsAdmin();
 
@@ -147,6 +151,118 @@ public class AdminController(DbService db, CloudServerService cloudServers, Clou
             return Ok(rows);
         }
         catch (Exception ex) { return ApiResults.Error(500, ex.Message, "SERVER_ERROR"); }
+    }
+
+    [HttpPost("browse-executable")]
+    public IActionResult BrowseExecutable()
+    {
+        if (!IsAdmin) return ApiResults.Error(403, "Insufficient permissions", "FORBIDDEN");
+        if (!OperatingSystem.IsWindows())
+            return ApiResults.Error(400, "Browse is only available when the API runs on Windows (your gaming PC). Type the path manually from other devices.", "UNSUPPORTED");
+        try
+        {
+            var script = Path.Combine(env.ContentRootPath, "Scripts", "browse-exe.ps1");
+            var path = ExecutableBrowse.PickWindowsExecutable(script);
+            if (string.IsNullOrWhiteSpace(path))
+                return Ok(new { cancelled = true, path = (string?)null });
+            if (!path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                return ApiResults.Error(400, "Please select a .exe file", "VALIDATION_ERROR");
+            return Ok(new { cancelled = false, path });
+        }
+        catch (Exception ex) { return ApiResults.Error(500, ex.Message, "SERVER_ERROR"); }
+    }
+
+    [HttpPost("games/quick-cloud")]
+    public async Task<IActionResult> QuickCloudGame([FromBody] QuickCloudGameRequest body)
+    {
+        if (!IsAdmin) return ApiResults.Error(403, "Insufficient permissions", "FORBIDDEN");
+        var exePath = body.ExecutablePath?.Trim();
+        if (string.IsNullOrWhiteSpace(exePath))
+            return ApiResults.Error(400, "Executable path is required", "VALIDATION_ERROR");
+        if (!exePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            return ApiResults.Error(400, "Path must point to a .exe file", "VALIDATION_ERROR");
+
+        try
+        {
+            var fileName = Path.GetFileNameWithoutExtension(exePath);
+            var displayName = string.IsNullOrWhiteSpace(body.Name) ? HumanizeExeName(fileName) : body.Name.Trim();
+            var slug = Slugify.FromName(displayName);
+            var adminId = User.GetUserId();
+            await using var conn = db.CreateConnection();
+            await conn.OpenAsync();
+
+            var existing = await conn.QueryFirstOrDefaultAsync<dynamic>(
+                @"SELECT game_id, name, cloud_enabled, status, slug
+                  FROM games WHERE slug=@slug OR LOWER(name)=LOWER(@name)
+                  ORDER BY game_id ASC LIMIT 1",
+                new { slug, name = displayName });
+
+            if (existing != null)
+            {
+                var gid = (int)existing.game_id;
+                if (!(bool)existing.cloud_enabled || (string)existing.status != "approved")
+                {
+                    await conn.ExecuteAsync(
+                        "UPDATE games SET cloud_enabled=TRUE, status='approved' WHERE game_id=@gid",
+                        new { gid });
+                }
+                return Ok(new
+                {
+                    created = false,
+                    game_id = gid,
+                    name = (string)existing.name,
+                    executable_path = exePath,
+                });
+            }
+
+            var username = await conn.ExecuteScalarAsync<string>(
+                "SELECT username FROM users WHERE user_id=@id", new { id = adminId }) ?? "Admin";
+            var uniqueSlug = await EnsureUniqueSlugAsync(conn, slug);
+            var cover = $"https://picsum.photos/seed/{uniqueSlug}/400/560";
+            var gameId = await conn.ExecuteScalarAsync<long>(
+                @"INSERT INTO games (name, slug, short_desc, description, genre, tags, developer_name, developer_id,
+                  price, is_free, cover_url, cloud_enabled, status, download_size_gb)
+                  VALUES (@name, @slug, @desc, @desc, 'Action', 'Cloud', @dev, @devId,
+                  0, TRUE, @cover, TRUE, 'approved', 25);
+                  SELECT LAST_INSERT_ID();",
+                new
+                {
+                    name = displayName,
+                    slug = uniqueSlug,
+                    desc = $"Cloud stream from {Path.GetFileName(exePath)}",
+                    dev = username,
+                    devId = adminId,
+                    cover,
+                });
+
+            return Ok(new
+            {
+                created = true,
+                game_id = (int)gameId,
+                name = displayName,
+                executable_path = exePath,
+            });
+        }
+        catch (Exception ex) { return ApiResults.Error(500, ex.Message, "SERVER_ERROR"); }
+    }
+
+    private static string HumanizeExeName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)) return "Cloud Game";
+        var s = fileName.Replace('_', ' ').Replace('-', ' ').Trim();
+        return string.IsNullOrWhiteSpace(s) ? "Cloud Game" : s;
+    }
+
+    private static async Task<string> EnsureUniqueSlugAsync(System.Data.Common.DbConnection conn, string slug)
+    {
+        var candidate = slug;
+        var n = 1;
+        while (await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM games WHERE slug=@s", new { s = candidate }) > 0)
+        {
+            n++;
+            candidate = $"{slug}-{n}";
+        }
+        return candidate;
     }
 
     [HttpGet("purchases")]
@@ -388,4 +504,5 @@ public class AdminController(DbService db, CloudServerService cloudServers, Clou
         string? Status, string? Notes);
     public record CloudServerGamesRequest(IEnumerable<GameMappingDto>? Mappings);
     public record GameMappingDto(int GameId, string? ExecutablePath);
+    public record QuickCloudGameRequest(string? ExecutablePath, string? Name);
 }

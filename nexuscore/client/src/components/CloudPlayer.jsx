@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import Icon from './Icon';
 import { useRealStream } from '../hooks/useRealStream';
+import { useSpectatorStream } from '../hooks/useSpectatorStream';
+import PrivateStreamGate from './PrivateStreamGate';
 
 const CURSOR_HIDE_MS = 2800;
 const LEFT_EDGE_PX = 56;
@@ -56,6 +58,9 @@ function NetworkBars({ quality }) {
 
 export default function CloudPlayer({
   session,
+  watchTarget,
+  onStopWatching,
+  viewerQueue,
   elapsed,
   formatElapsed,
   displayQuality,
@@ -72,22 +77,40 @@ export default function CloudPlayer({
   const [cursorVisible, setCursorVisible] = useState(true);
   const [leftEdgeHover, setLeftEdgeHover] = useState(false);
   const [muted, setMuted] = useState(false);
-  const stats = useTelemetry(!!session, targetFps);
-  const isReal = !!session?.is_real_stream;
+  const stats = useTelemetry(!!session || !!watchTarget, targetFps);
+  const isWatching = !!watchTarget && !session;
+  const isReal = !!session?.is_real_stream || (isWatching && !!watchTarget?.is_real_stream);
   const handleStreamEnded = useCallback(() => {
     onGameClosed?.();
   }, [onGameClosed]);
-  const { canvasRef, bindViewport, streamStatus, streamError } = useRealStream(session, isReal, handleStreamEnded);
-  const viewportRef = useRef(null);
+  const { canvasRef, bindViewport, streamStatus, streamError, inputFocused, pointerLocked } = useRealStream(
+    session,
+    !!session?.is_real_stream,
+    handleStreamEnded,
+  );
+  const {
+    canvasRef: spectatorCanvasRef,
+    streamStatus: spectatorStatus,
+    watchState,
+    canView: canViewSpectator,
+    clearCanvas,
+  } = useSpectatorStream(watchTarget, isWatching);
+  const inputLayerRef = useRef(null);
+  const displayStreamStatus = isWatching ? spectatorStatus : streamStatus;
+  const showPrivateGate = isWatching && !canViewSpectator;
 
   useEffect(() => {
-    if (!isReal || !viewportRef.current) return;
-    return bindViewport(viewportRef.current);
-  }, [isReal, bindViewport, session?.session_id]);
+    if (showPrivateGate) clearCanvas();
+  }, [showPrivateGate, clearCanvas]);
 
-  const active = !!session;
-  const showStatsPanel = statsLocked || (leftEdgeHover && cursorVisible);
-  const showBottomBar = statsLocked || cursorVisible;
+  useEffect(() => {
+    if (!isReal || streamStatus !== 'streaming' || !inputLayerRef.current) return;
+    return bindViewport(inputLayerRef.current);
+  }, [isReal, streamStatus, bindViewport, session?.session_id]);
+
+  const active = !!session || isWatching;
+  const showStatsPanel = !isWatching && (statsLocked || (leftEdgeHover && cursorVisible));
+  const showBottomBar = !isWatching && (statsLocked || cursorVisible);
 
   const toggleFullscreen = useCallback(async () => {
     const el = containerRef.current;
@@ -119,7 +142,11 @@ export default function CloudPlayer({
     if (!active) {
       setCursorVisible(true);
       setLeftEdgeHover(false);
-      return;
+      return undefined;
+    }
+    if (isReal && streamStatus === 'streaming') {
+      setCursorVisible(!inputFocused || !pointerLocked);
+      return undefined;
     }
     const markMove = () => {
       lastMoveRef.current = Date.now();
@@ -133,10 +160,16 @@ export default function CloudPlayer({
       window.removeEventListener('mousemove', markMove);
       clearInterval(iv);
     };
-  }, [active]);
+  }, [active, isReal, streamStatus, inputFocused, pointerLocked]);
 
   const handlePlayerMouseMove = (e) => {
     if (!active || !containerRef.current) return;
+    if (isReal && (inputFocused || streamStatus === 'streaming')) {
+      if (!inputFocused) {
+        lastMoveRef.current = Date.now();
+      }
+      return;
+    }
     const rect = containerRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     setLeftEdgeHover(x <= LEFT_EDGE_PX);
@@ -151,7 +184,7 @@ export default function CloudPlayer({
   return (
     <div
       ref={containerRef}
-      className={`cloud-player ${isFullscreen ? 'cloud-player-fs' : ''} ${active && !cursorVisible ? 'cloud-cursor-hidden' : ''}`}
+      className={`cloud-player ${isFullscreen ? 'cloud-player-fs' : ''} ${active && !cursorVisible ? 'cloud-cursor-hidden' : ''} ${inputFocused ? 'cloud-input-active' : ''} ${pointerLocked ? 'cloud-pointer-locked' : ''}`}
       onMouseMove={handlePlayerMouseMove}
       onMouseLeave={handlePlayerMouseLeave}
     >
@@ -162,14 +195,42 @@ export default function CloudPlayer({
 
         {active ? (
           <div
-            ref={viewportRef}
-            className="cloud-player-viewport"
-            style={isReal ? { background: '#000' } : { backgroundImage: `url(${session.cover_url})` }}
+            className={`cloud-player-viewport ${isReal && displayStreamStatus === 'streaming' ? 'cloud-stream-active' : ''} ${isWatching ? 'cloud-watch-mode' : ''}`}
+            style={isReal || isWatching ? { background: '#000' } : { backgroundImage: `url(${session.cover_url})` }}
           >
-            {isReal && (
-              <canvas ref={canvasRef} className="cloud-real-canvas" style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
+            {isWatching && showPrivateGate && (
+              <PrivateStreamGate
+                watchState={watchState}
+                viewerQueue={viewerQueue}
+                onStopWatching={onStopWatching}
+              />
             )}
-            {isReal && streamStatus !== 'streaming' && streamStatus !== 'idle' && (
+            {isWatching && canViewSpectator && watchTarget?.is_real_stream && (
+              <canvas ref={spectatorCanvasRef} className="cloud-real-canvas" />
+            )}
+            {isWatching && canViewSpectator && !watchTarget?.is_real_stream && (
+              <>
+                <div className="cloud-player-backdrop" />
+                {watchTarget?.cover_url && (
+                  <div className="cloud-watch-simulated" style={{ backgroundImage: `url(${watchTarget.cover_url})` }} />
+                )}
+                <div className="cloud-stream-status-overlay" style={{ pointerEvents: 'none' }}>
+                  <strong style={{ color: 'var(--accent-glow)' }}>Spectator view</strong>
+                  <span>{watchTarget?.game_name || 'Simulated stream'}</span>
+                </div>
+              </>
+            )}
+            {session && isReal && (
+              <canvas ref={canvasRef} className="cloud-real-canvas" />
+            )}
+            {session && isReal && streamStatus === 'streaming' && (
+              <div
+                ref={inputLayerRef}
+                className="cloud-input-layer"
+                aria-label="Game stream input area"
+              />
+            )}
+            {session && isReal && streamStatus !== 'streaming' && streamStatus !== 'idle' && (
               <div className="cloud-stream-status-overlay" style={{
                 position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
                 background: 'rgba(0,0,0,0.85)', color: 'var(--text-muted)', fontSize: 14, padding: 24, textAlign: 'center',
@@ -191,22 +252,33 @@ export default function CloudPlayer({
                 {streamError && <span style={{ fontSize: 12 }}>Check Admin → Cloud → Connection log and nexuscore/agent/logs/agent.log</span>}
               </div>
             )}
-            {isReal && streamStatus === 'streaming' && (
+            {session && isReal && streamStatus === 'streaming' && (
               <div className="cloud-stream-focus-hint" style={{
                 position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)',
                 background: 'rgba(0,0,0,0.55)', padding: '6px 12px', borderRadius: 8, fontSize: 12,
-                color: 'var(--text-muted)', pointerEvents: 'none', opacity: cursorVisible ? 0.9 : 0,
+                color: 'var(--text-muted)', pointerEvents: 'none', opacity: inputFocused ? 0.35 : 0.9,
                 transition: 'opacity 0.2s',
               }}>
-                Click here to control · keyboard works after click
+                {inputFocused
+                  ? (pointerLocked ? 'Esc to release mouse' : 'Keyboard active · Esc to release · move mouse over stream')
+                  : 'Click stream to play — mouse and keyboard go to the game'}
               </div>
             )}
-            {!isReal && <div className="cloud-player-backdrop" />}
-            {!isReal && <div className="cloud-scanlines" aria-hidden="true" />}
+            {isWatching && canViewSpectator && (
+              <div className="cloud-stream-focus-hint" style={{
+                position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)',
+                background: 'rgba(0,0,0,0.55)', padding: '6px 12px', borderRadius: 8, fontSize: 12,
+                color: 'var(--text-muted)', pointerEvents: 'none', opacity: 0.85,
+              }}>
+                Spectator mode — view only
+              </div>
+            )}
+            {session && !isReal && <div className="cloud-player-backdrop" />}
+            {session && !isReal && <div className="cloud-scanlines" aria-hidden="true" />}
 
-            <div className={`cloud-left-edge-zone ${cursorVisible ? '' : 'disabled'}`} aria-hidden="true" />
+            <div className={`cloud-left-edge-zone ${cursorVisible && !inputFocused ? '' : 'disabled'}`} aria-hidden="true" />
 
-            {!cursorVisible && !statsLocked && (
+            {!inputFocused && !statsLocked && !isReal && (
               <div className="cloud-cursor-hidden-badge">Gameplay mode — move mouse to show cursor</div>
             )}
 
@@ -237,29 +309,51 @@ export default function CloudPlayer({
               </div>
               <div className="cloud-drawer-meta">
                 <StatChip label="ENC" value="H.265" />
-                <StatChip label="SERVER" value={session.server_name || session.server_region?.replace(/-/g, ' ') || 'EU-Central'} />
+                <StatChip label="SERVER" value={session?.server_name || session?.server_region?.replace(/-/g, ' ') || 'EU-Central'} />
                 <NetworkBars quality={displayQuality} />
               </div>
             </div>
 
-            {showStatsPanel && (
+            {showStatsPanel && session && (
               <div className="cloud-player-topbar compact">
                 <span className="cloud-live-badge"><span className="live-dot" /> LIVE</span>
                 <span className="cloud-game-title">{session.name}</span>
               </div>
             )}
-
-            <div className={`cloud-player-center minimal ${showStatsPanel ? 'dimmed' : ''} ${isReal ? 'real-hidden' : ''}`}>
-              <img src={session.cover_url} alt="" className="cloud-poster" />
-              <p className="font-display cloud-center-title">{session.name}</p>
-              <div className="cloud-timer-row">
-                <span className="cloud-elapsed">{formatElapsed(elapsed)}</span>
-                {session.minutes_remaining != null && (
-                  <span className="cloud-remaining">{session.minutes_remaining} min left</span>
-                )}
+            {isWatching && canViewSpectator && (
+              <div className="cloud-player-topbar compact">
+                <span className="cloud-live-badge"><span className="live-dot" /> WATCHING</span>
+                <span className="cloud-game-title">{watchState?.game_name || watchTarget?.game_name || 'Live stream'}</span>
               </div>
-            </div>
+            )}
 
+            {session && !session.is_real_stream && (
+              <div className={`cloud-player-center minimal ${showStatsPanel ? 'dimmed' : ''}`}>
+                <img src={session.cover_url} alt="" className="cloud-poster" />
+                <p className="font-display cloud-center-title">{session.name}</p>
+                <div className="cloud-timer-row">
+                  <span className="cloud-elapsed">{formatElapsed(elapsed)}</span>
+                  {session.minutes_remaining != null && (
+                    <span className="cloud-remaining">{session.minutes_remaining} min left</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {isWatching ? (
+              <div className="cloud-player-bottombar visible">
+                <div className="cloud-bottom-left">
+                  <span className="cloud-quality-pill">Spectator</span>
+                  <span className="cloud-hint">{showPrivateGate ? 'Private stream' : 'View only'}</span>
+                </div>
+                <div className="cloud-bottom-controls">
+                  <button type="button" className="cloud-ctrl-btn" onClick={toggleFullscreen} title="Fullscreen (F11)">
+                    <Icon name={isFullscreen ? 'minimize' : 'maximize'} size={16} />
+                  </button>
+                  <button type="button" className="btn btn-ghost cloud-end-btn" onClick={onStopWatching}>Stop Watching</button>
+                </div>
+              </div>
+            ) : (
             <div className={`cloud-player-bottombar ${showBottomBar ? 'visible' : ''}`}>
               <div className="cloud-bottom-left">
                 <span className="cloud-quality-pill">{displayQuality}</span>
@@ -279,6 +373,7 @@ export default function CloudPlayer({
                 <button type="button" className="btn btn-danger cloud-end-btn" onClick={onEnd}>End Session</button>
               </div>
             </div>
+            )}
           </div>
         ) : (
           <div className="cloud-player-viewport cloud-player-idle">
