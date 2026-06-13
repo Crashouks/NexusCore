@@ -32,8 +32,7 @@ On first run the launcher will create `.env` files, install dependencies, seed t
 
 | File | Purpose |
 |------|---------|
-| **`start-site-network.bat`** | Website + API over HTTP (binds `0.0.0.0` — localhost, Tailscale IP, or LAN) |
-| **`start-site-https.bat`** | Same as above + **HTTPS** via Tailscale Serve (recommended for remote play) |
+| **`start-site-network.bat`** | Website + API (binds `0.0.0.0` — localhost, Tailscale IP, or LAN) |
 | **`start-cloud-gaming.bat`** | Cloud agent (screen stream + game launch on your PC) |
 | **`stop.bat`** | Stop processes on ports 5000 / 5173 |
 
@@ -110,7 +109,7 @@ Both PCs must be on the **same Tailscale account** (tailnet), even if they are o
 
 **On PC A (Windows server)**
 
-1. Install and connect **Tailscale** (`tailscale up`). Note your Tailscale IP (e.g. `100.69.4.120`) or use **`start-site-https.bat`** for `https://your-pc.tailXXXX.ts.net`.
+1. Install and connect **Tailscale** (`tailscale up`). Note your Tailscale IP (e.g. `100.69.4.120`).
 2. Edit `nexuscore/.env`:
    ```env
    NETWORK_MODE=1
@@ -130,14 +129,9 @@ sudo tailscale up
 tailscale status    # must list the Windows machine
 ```
 
-Open **`http://100.69.4.120:5173`** (Tailscale IP — **not** `localhost`).  
-For HTTPS: **`https://your-windows-pc.tailXXXX.ts.net`** after using `start-site-https.bat` on PC A.
+Open **`http://100.69.4.120:5173`** (Tailscale IP — **not** `localhost`).
 
 Log in → **Stream Now** → **Real** server → click the game view for keyboard/mouse.
-
-**Optional: HTTPS on PC A**
-
-Run **`start-site-https.bat`** instead of step 3. It configures Tailscale Serve and sets `https://` URLs in `.env` automatically.
 
 ---
 
@@ -197,7 +191,7 @@ Split the stack so **site**, **gaming agent**, and **player** are on separate ma
 
 | Method | PC 1 exposes | PC 2 agent `apiUrl` | PC 3 browser |
 |--------|--------------|---------------------|--------------|
-| **Tailscale** (recommended) | Tailscale IP or `*.ts.net` | `http://100.x.x.x:5000/api` | `http://100.x.x.x:5173` |
+| **Tailscale** (recommended) | Tailscale IP | `http://100.x.x.x:5000/api` | `http://100.x.x.x:5173` |
 | **ngrok / tunnel** | `https://xyz.ngrok.app` | `https://xyz.ngrok.app/api` | `https://xyz.ngrok.app` |
 
 All three machines must be able to **reach PC 1’s host URL**. PC 2 does not need to reach PC 3; the player connects to PC 1’s website, which coordinates streaming via PC 2’s agent.
@@ -208,8 +202,7 @@ All three machines must be able to **reach PC 1’s host URL**. PC 2 does not ne
 
 | Problem | Fix |
 |---------|-----|
-| Site won't load on player PC | Firewall on host; confirm `start-site-network.bat` is running; use Tailscale IP or `*.ts.net`, not host's LAN IP from another network |
-| HTTPS certificate errors | Use Tailscale hostname from `start-site-https.bat`; run `tailscale serve reset` to revert to HTTP |
+| Site won't load on player PC | Firewall on host; confirm `start-site-network.bat` is running; use the host's **Tailscale IP**, not its LAN IP from another network |
 | `ping` / Tailscale fails | Both sides on same Tailscale account; run `tailscale up` |
 | Agent Offline (split setup) | `config.json` `apiUrl` must be PC 1's `PUBLIC_API_URL`; correct `serverId` and agent password |
 | "Cannot reach game server" | Hard refresh on player; `client/.env` must have `VITE_API_URL=/api` |
@@ -251,7 +244,6 @@ Open **http://localhost:5173**.
 |--------------|--------------|
 | 1 PC | http://localhost:5173 |
 | 2 / 3 PCs (Tailscale) | `PUBLIC_WEB_URL` from host `.env` (e.g. http://100.x.x.x:5173) |
-| HTTPS (optional) | https://your-pc.tailXXXX.ts.net via `start-site-https.bat` |
 
 ---
 
