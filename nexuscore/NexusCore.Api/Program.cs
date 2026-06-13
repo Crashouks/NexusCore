@@ -1,8 +1,10 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
+using NexusCore.Api.Helpers;
 using NexusCore.Api.Hubs;
 using NexusCore.Api.Services;
 
@@ -14,6 +16,7 @@ builder.Services.AddSingleton<DbService>();
 builder.Services.AddSingleton<JwtTokenService>();
 builder.Services.AddSingleton<SessionExpiryService>();
 builder.Services.AddSingleton<CloudServerService>();
+builder.Services.AddSingleton<CloudDiagnosticsLog>();
 builder.Services.AddSingleton<ChatService>();
 builder.Services.AddSingleton<ForumService>();
 builder.Services.AddSingleton<NotificationService>();
@@ -43,17 +46,32 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         {
             OnMessageReceived = context =>
             {
-                var accessToken = context.Request.Query["access_token"];
+                if (string.IsNullOrEmpty(context.Token)
+                    && context.Request.Cookies.TryGetValue(AuthCookie.Name, out var cookieToken)
+                    && !string.IsNullOrEmpty(cookieToken))
+                {
+                    context.Token = cookieToken;
+                    return Task.CompletedTask;
+                }
+
                 var path = context.HttpContext.Request.Path;
-                if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
-                    context.Token = accessToken;
+                if (string.IsNullOrEmpty(context.Token) && path.StartsWithSegments("/hubs"))
+                {
+                    var accessToken = context.Request.Query["access_token"];
+                    if (!string.IsNullOrEmpty(accessToken))
+                        context.Token = accessToken;
+                }
                 return Task.CompletedTask;
             }
         };
     });
 
 builder.Services.AddAuthorization();
-builder.Services.AddSignalR().AddJsonProtocol(o =>
+builder.Services.AddSignalR(o =>
+{
+    o.MaximumReceiveMessageSize = 2 * 1024 * 1024;
+    o.EnableDetailedErrors = builder.Environment.IsDevelopment();
+}).AddJsonProtocol(o =>
 {
     o.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
 });
@@ -64,8 +82,15 @@ builder.Services.AddControllers()
         o.JsonSerializerOptions.DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower;
     });
 
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
-    p.SetIsOriginAllowed(_ => true)
+    p.WithOrigins(CorsOrigins.GetAllowedOrigins())
      .AllowAnyHeader()
      .AllowAnyMethod()
      .AllowCredentials()));
@@ -103,6 +128,8 @@ catch (Exception ex)
     return;
 }
 
+app.UseForwardedHeaders();
+
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
@@ -129,9 +156,25 @@ app.MapHub<CloudStreamHub>("/hubs/cloud-stream");
 var port = Environment.GetEnvironmentVariable("PORT")
     ?? builder.Configuration["Port"]
     ?? "5000";
-app.Urls.Add($"http://localhost:{port}");
+var bindHost = Environment.GetEnvironmentVariable("API_BIND");
+if (string.IsNullOrWhiteSpace(bindHost))
+    bindHost = Environment.GetEnvironmentVariable("NETWORK_MODE") == "1" ? "0.0.0.0" : "localhost";
+app.Urls.Add($"http://{bindHost}:{port}");
 
-Console.WriteLine($"NexusCore API running on http://localhost:{port}");
+var publicApi = Environment.GetEnvironmentVariable("PUBLIC_API_URL");
+var publicWeb = Environment.GetEnvironmentVariable("PUBLIC_WEB_URL");
+var httpsMode = Environment.GetEnvironmentVariable("HTTPS_MODE") == "1"
+    || (publicWeb?.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ?? false);
+Console.WriteLine($"NexusCore API running on http://{bindHost}:{port}");
+if (bindHost == "0.0.0.0")
+    Console.WriteLine("Network mode: API reachable from other devices on this machine's IP or PUBLIC_API_URL");
+if (httpsMode)
+    Console.WriteLine("HTTPS mode: players should use PUBLIC_WEB_URL (Tailscale Serve or reverse proxy)");
+if (!string.IsNullOrEmpty(publicApi))
+    Console.WriteLine($"PUBLIC_API_URL (agent): {publicApi}");
+if (!string.IsNullOrEmpty(publicWeb))
+    Console.WriteLine($"PUBLIC_WEB_URL (players): {publicWeb}");
+Console.WriteLine($"CORS origins: {string.Join(", ", CorsOrigins.GetAllowedOrigins())}");
 Console.WriteLine($"Swagger UI: http://localhost:{port}/swagger");
 Console.WriteLine($"Chat Hub: ws://localhost:{port}/hubs/chat");
 Console.WriteLine($"Cloud Stream Hub: ws://localhost:{port}/hubs/cloud-stream");

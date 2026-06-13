@@ -1,7 +1,7 @@
 import { useState, forwardRef, useImperativeHandle } from 'react';
 import Icon from './Icon';
 
-const API = import.meta.env.VITE_API_URL || '/api';
+import { getApiBase } from '../api/api';
 
 const ImageInput = forwardRef(function ImageInput({ value, onChange, label = 'Cover Image' }, ref) {
   const [tab, setTab] = useState('url');
@@ -19,11 +19,10 @@ const ImageInput = forwardRef(function ImageInput({ value, onChange, label = 'Co
         const fd = new FormData();
         fd.append('file', pendingFile);
         fd.append('game_id', String(gameId));
-        const token = localStorage.getItem('nc_token');
-        const res = await fetch(`${API}/upload`, {
+        const res = await fetch(`${getApiBase()}/upload`, {
           method: 'POST',
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
           body: fd,
+          credentials: 'include',
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
@@ -45,9 +44,8 @@ const ImageInput = forwardRef(function ImageInput({ value, onChange, label = 'Co
     setError('');
     if (!urlInput.trim()) return;
     try {
-      const token = localStorage.getItem('nc_token');
-      const res = await fetch(`${API}/media/validate-url?url=${encodeURIComponent(urlInput)}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      const res = await fetch(`${getApiBase()}/media/validate-url?url=${encodeURIComponent(urlInput)}`, {
+        credentials: 'include',
       });
       const data = await res.json();
       if (!data.valid) { setError(data.error || 'Invalid image URL'); return; }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/api';
 import { useAuth } from '../context/AuthContext';
@@ -88,6 +88,11 @@ export default function CloudPage() {
     showToast('Session ended', 'success');
   };
 
+  const handleGameClosed = useCallback(() => {
+    refreshSession();
+    showToast('Game closed — cloud session ended', 'success');
+  }, [refreshSession, showToast]);
+
   const handleLeaveQueue = async () => {
     await api.cloud.queueLeave();
     setQueue(null);
@@ -140,6 +145,7 @@ export default function CloudPage() {
           statsLocked={statsLocked}
           onToggleStatsLock={toggleStatsLock}
           onEnd={handleEnd}
+          onGameClosed={handleGameClosed}
         />
       </section>
 

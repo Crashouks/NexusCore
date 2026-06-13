@@ -3,6 +3,26 @@ import { api } from '../api/api';
 
 const AuthContext = createContext(null);
 
+function userFromProfile(p) {
+  if (!p) return null;
+  return {
+    userId: p.user_id,
+    username: p.username,
+    role: p.role,
+    cloudPlan: p.cloud_plan,
+  };
+}
+
+function userFromAuthResponse(u) {
+  if (!u) return null;
+  return {
+    userId: u.userId,
+    username: u.username,
+    role: u.role,
+    cloudPlan: u.cloudPlan,
+  };
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -13,41 +33,43 @@ export function AuthProvider({ children }) {
     try {
       const p = await api.users.me();
       setProfile(p);
+      setUser(userFromProfile(p));
       const lib = await api.users.library(p.user_id);
       setLibrary(lib);
-    } catch { setProfile(null); setLibrary([]); }
+    } catch {
+      setProfile(null);
+      setLibrary([]);
+      setUser(null);
+    }
   }, []);
 
   useEffect(() => {
-    const token = localStorage.getItem('nc_token');
-    const saved = localStorage.getItem('nv_user');
-    if (token && saved) {
-      setUser(JSON.parse(saved));
-      loadProfile().finally(() => setLoading(false));
-    } else {
-      setLoading(false);
-    }
+    loadProfile().finally(() => setLoading(false));
+    localStorage.removeItem('nc_token');
   }, [loadProfile]);
 
   const login = async (email, password) => {
     const data = await api.auth.login(email, password);
-    localStorage.setItem('nc_token', data.token);
-    localStorage.setItem('nv_user', JSON.stringify(data.user));
-    setUser(data.user);
+    localStorage.removeItem('nc_token');
+    localStorage.removeItem('nv_user');
+    setUser(userFromAuthResponse(data.user));
     await loadProfile();
     return data;
   };
 
   const register = async (username, email, password) => {
     const data = await api.auth.register(username, email, password);
-    localStorage.setItem('nc_token', data.token);
-    localStorage.setItem('nv_user', JSON.stringify(data.user));
-    setUser(data.user);
+    localStorage.removeItem('nc_token');
+    localStorage.removeItem('nv_user');
+    setUser(userFromAuthResponse(data.user));
     await loadProfile();
     return data;
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await api.auth.logout();
+    } catch { /* ignore */ }
     localStorage.removeItem('nc_token');
     localStorage.removeItem('nv_user');
     setUser(null);

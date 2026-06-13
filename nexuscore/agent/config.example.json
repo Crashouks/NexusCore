@@ -1,6 +1,13 @@
 {
-  "apiUrl": "http://localhost:5000/api",
+  "apiUrl": "http://YOUR-SERVER-IP-OR-TUNNEL:5000/api",
   "serverId": 1,
   "password": "",
-  "pollIntervalMs": 3000
+  "pollIntervalMs": 3000,
+  "streamMinFps": 2,
+  "streamMaxFps": 20,
+  "streamMinQuality": 22,
+  "streamMaxQuality": 72,
+  "streamGameWindowOnly": true,
+  "streamWaitForGameMs": 90000,
+  "_comment": "apiUrl must be reachable from the gaming PC — use Admin → Cloud URLs or PUBLIC_API_URL from host .env"
 }

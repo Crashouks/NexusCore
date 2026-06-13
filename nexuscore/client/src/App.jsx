@@ -49,6 +49,7 @@ function AppContent() {
       <CloudSessionBar />
       <TrialBar />
       <TrialExpiredModal />
+      <main className="app-main">
       <Routes>
         <Route path="/" element={<ShopPage />} />
         <Route path="/store" element={<Store />} />
@@ -73,6 +74,7 @@ function AppContent() {
         <Route path="/developer" element={<ProtectedRoute roles={['developer', 'admin']}><DeveloperPanel /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute roles={['admin']}><AdminPanel /></ProtectedRoute>} />
       </Routes>
+      </main>
       <Footer />
     </>
   );

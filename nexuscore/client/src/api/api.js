@@ -1,15 +1,21 @@
-const API = import.meta.env.VITE_API_URL || '/api';
-
-function getToken() {
-  return localStorage.getItem('nc_token');
+/** API base for browser fetch — use /api on remote clients so Vite proxies to the backend. */
+export function getApiBase() {
+  let base = import.meta.env.VITE_API_URL || '/api';
+  if (typeof window !== 'undefined' && /localhost|127\.0\.0\.1/.test(base)) {
+    const h = window.location.hostname;
+    if (h !== 'localhost' && h !== '127.0.0.1') base = '/api';
+  }
+  return base;
 }
+
+const API = getApiBase();
+
+const FETCH_OPTS = { credentials: 'include' };
 
 async function request(path, options = {}) {
   const headers = { 'Content-Type': 'application/json', ...options.headers };
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${API}${path}`, { ...options, headers });
+  const res = await fetch(`${API}${path}`, { ...options, headers, ...FETCH_OPTS });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(data.error || res.statusText || 'Request failed');
@@ -32,6 +38,7 @@ export const api = {
   auth: {
     login: (email, password) => api.post('/auth/login', { email, password }),
     register: (username, email, password) => api.post('/auth/register', { username, email, password }),
+    logout: () => api.post('/auth/logout'),
   },
   users: {
     me: () => api.get('/users/me'),
@@ -80,6 +87,7 @@ export const api = {
   cloud: {
     plans: () => api.get('/cloud/plans'),
     servers: (gameId) => api.get(`/cloud/servers${gameId ? `?game_id=${gameId}` : ''}`),
+    setupInfo: () => api.get('/cloud/setup-info'),
     subscribe: (plan) => api.post('/cloud/subscribe', { plan }),
     queueStatus: () => api.get('/cloud/queue/status'),
     queueJoin: (gameId) => api.post('/cloud/queue/join', { game_id: gameId }),
@@ -112,11 +120,10 @@ export const api = {
       if (file.size > 10 * 1024 * 1024) throw new Error('Avatar must be 10 MB or smaller');
       const fd = new FormData();
       fd.append('file', file);
-      const token = getToken();
       const res = await fetch(`${API}/media/avatar`, {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: fd,
+        credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Upload failed');
@@ -126,11 +133,10 @@ export const api = {
       const fd = new FormData();
       fd.append('file', file);
       fd.append('game_id', String(gameId));
-      const token = getToken();
       const res = await fetch(`${API}/upload`, {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: fd,
+        credentials: 'include',
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -168,6 +174,7 @@ export const api = {
     deleteForumTopic: (id) => api.delete(`/admin/forums/${id}`),
     clearQueue: () => api.post('/admin/cloud/clear-queue'),
     cloudServers: () => api.get('/admin/cloud/servers'),
+    cloudDiagnostics: () => api.get('/admin/cloud/diagnostics'),
     cloudServerGames: (id) => api.get(`/admin/cloud/servers/${id}/games`),
     setCloudServerGames: (id, mappings) => api.put(`/admin/cloud/servers/${id}/games`, { mappings }),
     createCloudServer: (data) => api.post('/admin/cloud/servers', data),

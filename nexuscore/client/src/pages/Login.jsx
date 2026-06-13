@@ -26,8 +26,8 @@ export default function Login() {
   };
 
   return (
-    <div className="page" style={{ maxWidth: 420, margin: '60px auto' }}>
-      <h1 className="font-display gradient-text" style={{ fontSize: 36, textAlign: 'center', marginBottom: 8 }}>Welcome Back</h1>
+    <div className="page page--narrow">
+      <h1 className="font-display gradient-text auth-title">Welcome Back</h1>
       <p style={{ textAlign: 'center', color: 'var(--text-muted)', marginBottom: 32 }}>NexusCore — Own it. Try it. Stream it.</p>
       <form onSubmit={handleSubmit} className="card" style={{ padding: 32 }}>
         <div style={{ marginBottom: 16 }}>

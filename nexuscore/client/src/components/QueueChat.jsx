@@ -39,9 +39,8 @@ export default function QueueChat({ chatId, title = 'Queue Lobby Chat' }) {
         await loadHistory();
         if (!active) return;
 
-        const token = localStorage.getItem('nc_token');
         const connection = new signalR.HubConnectionBuilder()
-          .withUrl(`${HUB_URL}?access_token=${encodeURIComponent(token || '')}`)
+          .withUrl(HUB_URL, { withCredentials: true })
           .withAutomaticReconnect()
           .build();
 

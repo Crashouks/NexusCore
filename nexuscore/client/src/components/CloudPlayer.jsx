@@ -64,6 +64,7 @@ export default function CloudPlayer({
   statsLocked,
   onToggleStatsLock,
   onEnd,
+  onGameClosed,
 }) {
   const containerRef = useRef(null);
   const lastMoveRef = useRef(Date.now());
@@ -73,7 +74,10 @@ export default function CloudPlayer({
   const [muted, setMuted] = useState(false);
   const stats = useTelemetry(!!session, targetFps);
   const isReal = !!session?.is_real_stream;
-  const { canvasRef, bindViewport } = useRealStream(session, isReal);
+  const handleStreamEnded = useCallback(() => {
+    onGameClosed?.();
+  }, [onGameClosed]);
+  const { canvasRef, bindViewport, streamStatus, streamError } = useRealStream(session, isReal, handleStreamEnded);
   const viewportRef = useRef(null);
 
   useEffect(() => {
@@ -164,6 +168,38 @@ export default function CloudPlayer({
           >
             {isReal && (
               <canvas ref={canvasRef} className="cloud-real-canvas" style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
+            )}
+            {isReal && streamStatus !== 'streaming' && streamStatus !== 'idle' && (
+              <div className="cloud-stream-status-overlay" style={{
+                position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'rgba(0,0,0,0.85)', color: 'var(--text-muted)', fontSize: 14, padding: 24, textAlign: 'center',
+                flexDirection: 'column', gap: 8, pointerEvents: 'none',
+              }}>
+                <strong style={{ color: streamError ? 'var(--danger)' : 'var(--accent-glow)' }}>
+                  {streamError ? 'Stream error' : streamStatus === 'connecting' ? 'Connecting…' : 'Launching game on your PC…'}
+                </strong>
+                <span>{streamError || (streamStatus === 'connecting'
+                  ? 'Connecting to cloud stream…'
+                  : streamStatus === 'connected' || streamStatus === 'ready'
+                    ? 'Waiting for the game window to load — stream starts when the game is ready'
+                    : streamStatus === 'reconnecting'
+                      ? 'Reconnecting…'
+                      : `Stream: ${streamStatus}`)}</span>
+                {!streamError && (streamStatus === 'connected' || streamStatus === 'ready') && (
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Only the game window will be shown (not your desktop)</span>
+                )}
+                {streamError && <span style={{ fontSize: 12 }}>Check Admin → Cloud → Connection log and nexuscore/agent/logs/agent.log</span>}
+              </div>
+            )}
+            {isReal && streamStatus === 'streaming' && (
+              <div className="cloud-stream-focus-hint" style={{
+                position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)',
+                background: 'rgba(0,0,0,0.55)', padding: '6px 12px', borderRadius: 8, fontSize: 12,
+                color: 'var(--text-muted)', pointerEvents: 'none', opacity: cursorVisible ? 0.9 : 0,
+                transition: 'opacity 0.2s',
+              }}>
+                Click here to control · keyboard works after click
+              </div>
             )}
             {!isReal && <div className="cloud-player-backdrop" />}
             {!isReal && <div className="cloud-scanlines" aria-hidden="true" />}

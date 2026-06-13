@@ -25,6 +25,7 @@ copyEnvIfMissing('client/.env.example', 'client/.env');
 if (createdEnv) {
   console.log('');
   console.log('Edit nexuscore/.env and set DB_PASSWORD if your MySQL root user has one.');
+  console.log('For remote testing (3 laptops): use start-site-network.bat and set PUBLIC_API_URL in .env');
   console.log('Then run: npm run seed');
   console.log('');
 }

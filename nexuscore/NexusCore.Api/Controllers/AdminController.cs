@@ -10,7 +10,7 @@ namespace NexusCore.Api.Controllers;
 [ApiController]
 [Route("api/admin")]
 [Authorize]
-public class AdminController(DbService db, CloudServerService cloudServers) : ControllerBase
+public class AdminController(DbService db, CloudServerService cloudServers, CloudDiagnosticsLog diag) : ControllerBase
 {
     private bool IsAdmin => User.IsAdmin();
 
@@ -236,6 +236,26 @@ public class AdminController(DbService db, CloudServerService cloudServers) : Co
         catch (Exception ex) { return ApiResults.Error(500, ex.Message, "SERVER_ERROR"); }
     }
 
+    [HttpGet("cloud/diagnostics")]
+    public IActionResult CloudDiagnostics()
+    {
+        if (!IsAdmin) return ApiResults.Error(403, "Insufficient permissions", "FORBIDDEN");
+        var logs = diag.Recent(120).Select(e => new
+        {
+            at = e.At,
+            level = e.Level,
+            source = e.Source,
+            message = e.Message,
+            detail = e.Detail,
+        });
+        return Ok(new
+        {
+            logs,
+            agent_log_file = "nexuscore/agent/logs/agent.log",
+            api_console = "Also check the start-site-network.bat window for [cloud:...] lines",
+        });
+    }
+
     [HttpPost("cloud/servers")]
     public async Task<IActionResult> CreateCloudServer([FromBody] CloudServerRequest body)
     {
@@ -265,6 +285,8 @@ public class AdminController(DbService db, CloudServerService cloudServers) : Co
             && body.ServerTier == null && body.Status == null
             && body.Region == null && body.GpuModel == null && body.Notes == null)
             return ApiResults.Error(400, "No fields to update", "VALIDATION_ERROR");
+        var pwdErr = await ValidateCloudServerUpdateAsync(cloudServers, id, body);
+        if (pwdErr != null) return ApiResults.Error(400, pwdErr, "VALIDATION_ERROR");
         try
         {
             var ok = await cloudServers.UpdateAsync(id, new CloudServerService.CloudServerUpdate(
@@ -329,6 +351,27 @@ public class AdminController(DbService db, CloudServerService cloudServers) : Co
         if (string.IsNullOrWhiteSpace(body.Name)) return "Server name is required";
         if (string.IsNullOrWhiteSpace(body.Host)) return "Host is required";
         if ((body.MaxSlots ?? 1) < 1) return "Max slots must be at least 1";
+        var tier = body.ServerTier?.Trim().ToLowerInvariant() ?? "real";
+        if (tier == "real" && string.IsNullOrWhiteSpace(body.AccessPassword))
+            return "Agent password is required for real (Private PC) servers";
+        if (tier == "real" && body.AccessPassword!.Trim().Length < 8)
+            return "Agent password must be at least 8 characters";
+        return null;
+    }
+
+    private static async Task<string?> ValidateCloudServerUpdateAsync(
+        CloudServerService cloudServers, int id, CloudServerUpdateRequest body)
+    {
+        if (body.AccessPassword != null && !string.IsNullOrWhiteSpace(body.AccessPassword)
+            && body.AccessPassword.Trim().Length < 8)
+            return "Agent password must be at least 8 characters";
+        if (body.AccessPassword == null) return null;
+        if (!string.IsNullOrWhiteSpace(body.AccessPassword)) return null;
+        var server = await cloudServers.GetByIdAsync(id);
+        if (server == null) return null;
+        var tier = ((string?)server.server_tier) ?? "real";
+        if (tier == "real")
+            return "Agent password cannot be cleared on a real server — set a new password instead";
         return null;
     }
 

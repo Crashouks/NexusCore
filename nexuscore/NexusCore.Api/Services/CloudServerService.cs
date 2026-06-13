@@ -40,6 +40,10 @@ public class CloudServerService(DbService db, IConfiguration config)
         catch (MySqlException ex) when (ex.Number == 1060) { }
         try { await conn.ExecuteAsync("ALTER TABLE cloud_sessions ADD COLUMN is_real_stream BOOLEAN NOT NULL DEFAULT FALSE"); }
         catch (MySqlException ex) when (ex.Number == 1060) { }
+        try { await conn.ExecuteAsync("ALTER TABLE cloud_servers MODIFY account_username VARCHAR(100) NOT NULL DEFAULT ''"); }
+        catch (MySqlException) { }
+        try { await conn.ExecuteAsync("ALTER TABLE cloud_servers MODIFY account_secret VARCHAR(255) NOT NULL DEFAULT ''"); }
+        catch (MySqlException) { }
 
         await SeedFakeServersAsync(conn);
 
@@ -77,10 +81,10 @@ public class CloudServerService(DbService db, IConfiguration config)
         if (count > 0) return;
 
         await conn.ExecuteAsync(@"
-            INSERT INTO cloud_servers (name, host, region, gpu_model, max_slots, server_tier, status, notes) VALUES
-            ('NexusCore Free EU', 'free-eu.nexuscore.cloud', 'eu-west', 'Cloud GPU', 50, 'free_fake', 'online', 'Shared free tier — simulated stream'),
-            ('NexusCore Free US', 'free-us.nexuscore.cloud', 'us-east', 'Cloud GPU', 50, 'free_fake', 'online', 'Shared free tier — simulated stream'),
-            ('NexusCore RTX Pro', 'pro.nexuscore.cloud', 'eu-central', 'RTX 4080', 20, 'paid_fake', 'online', 'Premium datacenter — simulated stream, paid plan required')");
+            INSERT INTO cloud_servers (name, host, region, gpu_model, max_slots, account_username, account_secret, server_tier, status, notes) VALUES
+            ('NexusCore Free EU', 'free-eu.nexuscore.cloud', 'eu-west', 'Cloud GPU', 50, '', '', 'free_fake', 'online', 'Shared free tier — simulated stream'),
+            ('NexusCore Free US', 'free-us.nexuscore.cloud', 'us-east', 'Cloud GPU', 50, '', '', 'free_fake', 'online', 'Shared free tier — simulated stream'),
+            ('NexusCore RTX Pro', 'pro.nexuscore.cloud', 'eu-central', 'RTX 4080', 20, '', '', 'paid_fake', 'online', 'Premium datacenter — simulated stream, paid plan required')");
     }
 
     public async Task<IEnumerable<object>> ListPublicServersAsync(int? gameId, string cloudPlan)
@@ -91,9 +95,13 @@ public class CloudServerService(DbService db, IConfiguration config)
             SELECT s.server_id, s.name, s.region, s.gpu_model, s.max_slots, s.server_tier, s.status, s.last_heartbeat,
                    (s.player_password_hash IS NOT NULL AND s.player_password_hash != '') AS requires_player_password,
                    (SELECT COUNT(*) FROM cloud_sessions cs WHERE cs.server_id=s.server_id AND cs.status='active') AS active_sessions,
-                   CASE WHEN s.server_tier='real' THEN
+                   CASE WHEN @gid IS NULL OR @gid = 0 THEN TRUE
+                   WHEN s.server_tier = 'real' THEN
                      EXISTS(SELECT 1 FROM cloud_server_games sg WHERE sg.server_id=s.server_id AND sg.game_id=@gid)
-                   ELSE TRUE END AS has_game
+                   WHEN (SELECT COUNT(*) FROM cloud_server_games sg0 WHERE sg0.server_id=s.server_id) = 0 THEN TRUE
+                   ELSE
+                     EXISTS(SELECT 1 FROM cloud_server_games sg WHERE sg.server_id=s.server_id AND sg.game_id=@gid)
+                   END AS has_game
             FROM cloud_servers s
             ORDER BY FIELD(s.server_tier,'free_fake','paid_fake','real'), s.name",
             new { gid = gameId ?? 0 })).ToList();
@@ -162,7 +170,7 @@ public class CloudServerService(DbService db, IConfiguration config)
 
         if (tier == "real")
         {
-            if (s.executable_path == null)
+            if (s.executable_path == null || string.IsNullOrWhiteSpace((string)s.executable_path))
                 return (null, "This game is not installed on the selected machine");
             if ((string)s.status == "offline")
                 return (null, "Server is offline");
@@ -254,8 +262,7 @@ public class CloudServerService(DbService db, IConfiguration config)
         await conn.OpenAsync();
         var hash = await conn.ExecuteScalarAsync<string?>(
             "SELECT access_password_hash FROM cloud_servers WHERE server_id = @id", new { id = serverId });
-        if (hash == null) return false;
-        if (string.IsNullOrEmpty(hash)) return true;
+        if (string.IsNullOrEmpty(hash)) return false;
         if (string.IsNullOrEmpty(password)) return false;
         return BCrypt.Net.BCrypt.Verify(password, hash);
     }
@@ -284,6 +291,30 @@ public class CloudServerService(DbService db, IConfiguration config)
             INSERT INTO cloud_agent_jobs (session_id, server_id, game_id, job_type, status)
             VALUES (@sid, @srv, @gid, 'stop', 'pending')",
             new { sid = sessionId, srv = serverId, gid = gameId });
+    }
+
+    /// <summary>Ends an active session when the game process exits on the agent host.</summary>
+    public async Task<(bool ok, string? error, string? plan)> EndSessionByAgentAsync(
+        int sessionId, int serverId, string? password)
+    {
+        if (!await VerifyAccessAsync(serverId, password)) return (false, "Invalid server credentials", null);
+
+        await using var conn = db.CreateConnection();
+        await conn.OpenAsync();
+        var sessionsList = (await conn.QueryAsync<dynamic>(@"
+            SELECT session_id, plan, started_at FROM cloud_sessions
+            WHERE session_id=@sid AND server_id=@srv AND status='active'",
+            new { sid = sessionId, srv = serverId })).ToList();
+        if (sessionsList.Count == 0) return (false, "Session not found or already ended", null);
+
+        var s = sessionsList[0];
+        var duration = await conn.ExecuteScalarAsync<int>(
+            "SELECT TIMESTAMPDIFF(MINUTE, @start, NOW())", new { start = s.started_at });
+        await conn.ExecuteAsync(@"
+            UPDATE cloud_sessions SET status='ended', ended_at=NOW(), duration_mins=@dur
+            WHERE session_id=@id",
+            new { dur = duration, id = sessionId });
+        return (true, null, (string)s.plan);
     }
 
     public async Task<IEnumerable<dynamic>> PollJobsAsync(int serverId, string? password)
@@ -330,7 +361,11 @@ public class CloudServerService(DbService db, IConfiguration config)
                    (s.player_password_hash IS NOT NULL AND s.player_password_hash != '') AS has_player_password,
                    (SELECT COUNT(*) FROM cloud_sessions cs
                     WHERE cs.server_id = s.server_id AND cs.status = 'active') AS active_sessions,
-                   (SELECT COUNT(*) FROM cloud_server_games sg WHERE sg.server_id = s.server_id) AS game_count
+                   (SELECT COUNT(*) FROM cloud_server_games sg WHERE sg.server_id = s.server_id) AS game_count,
+                   (SELECT GROUP_CONCAT(g.name ORDER BY g.name SEPARATOR ', ')
+                    FROM cloud_server_games sg
+                    JOIN games g ON g.game_id = sg.game_id
+                    WHERE sg.server_id = s.server_id) AS game_names
             FROM cloud_servers s ORDER BY s.region, s.name");
     }
 
@@ -366,12 +401,12 @@ public class CloudServerService(DbService db, IConfiguration config)
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync();
         await conn.ExecuteAsync("DELETE FROM cloud_server_games WHERE server_id = @id", new { id = serverId }, tx);
-        foreach (var m in mappings.Where(m => !string.IsNullOrWhiteSpace(m.ExecutablePath)))
+        foreach (var m in mappings.Where(m => m.GameId > 0))
         {
             await conn.ExecuteAsync(@"
                 INSERT INTO cloud_server_games (server_id, game_id, executable_path)
                 VALUES (@sid, @gid, @path)",
-                new { sid = serverId, gid = m.GameId, path = m.ExecutablePath.Trim() }, tx);
+                new { sid = serverId, gid = m.GameId, path = (m.ExecutablePath ?? "").Trim() }, tx);
         }
         await tx.CommitAsync();
     }

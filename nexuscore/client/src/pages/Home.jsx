@@ -36,7 +36,7 @@ export default function Home() {
   }, [isAuth]);
 
   const scrollRow = (children) => (
-    <div style={{ display: 'flex', gap: 16, overflowX: 'auto', paddingBottom: 8, scrollbarWidth: 'thin' }}>
+    <div className="scroll-row">
       {children}
     </div>
   );
@@ -46,37 +46,33 @@ export default function Home() {
       <FeaturedBanner games={featured} />
 
       <div className="page">
-        <div style={{
-          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-          gap: 24, marginBottom: 48, padding: '32px 0',
-          borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)',
-        }}>
+        <div className="feature-grid">
           {[
             { icon: '🎮', title: 'Massive Catalog', desc: 'Hundreds of games, buy once, own forever.' },
             { icon: '☁', title: 'Cloud Play', desc: 'Stream in 4K. No hardware required.', color: 'var(--neon)' },
             { icon: '⏱', title: 'Free Trials', desc: '30 minutes free. No credit card.', color: 'var(--trial)' },
           ].map(f => (
             <div key={f.title} style={{ textAlign: 'center', padding: 16 }}>
-              <div style={{ fontSize: 36, marginBottom: 8 }}>{f.icon}</div>
-              <h3 className="font-display" style={{ fontSize: 20, fontWeight: 700, color: f.color || 'var(--accent-glow)', marginBottom: 8 }}>{f.title}</h3>
+              <div style={{ fontSize: 'clamp(28px, 6vw, 36px)', marginBottom: 8 }}>{f.icon}</div>
+              <h3 className="font-display" style={{ fontSize: 'clamp(16px, 3vw, 20px)', fontWeight: 700, color: f.color || 'var(--accent-glow)', marginBottom: 8 }}>{f.title}</h3>
               <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>{f.desc}</p>
             </div>
           ))}
         </div>
 
-        <section style={{ marginBottom: 48 }}>
+        <section className="shop-section">
           <h2 className="section-title">New Releases</h2>
           {scrollRow(newReleases.slice(0, 6).map(g => (
-            <div key={g.game_id} style={{ minWidth: 180, maxWidth: 180 }}>
+            <div key={g.game_id} className="scroll-row-item">
               <GameCard game={g} trialStatus={trials[g.game_id]} />
             </div>
           )))}
         </section>
 
-        <section style={{ marginBottom: 48 }}>
+        <section className="shop-section">
           <h2 className="section-title" style={{ color: 'var(--neon)' }}>☁ Cloud Play Ready</h2>
           {scrollRow(cloudGames.map(g => (
-            <div key={g.game_id} style={{ minWidth: 180, maxWidth: 180 }}>
+            <div key={g.game_id} className="scroll-row-item">
               <GameCard game={g} trialStatus={trials[g.game_id]} />
             </div>
           )))}
@@ -96,7 +92,7 @@ export default function Home() {
 
         <section>
           <h2 className="section-title">All Games</h2>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 16 }}>
+          <div className="game-grid">
             {allGames.map(g => (
               <GameCard key={g.game_id} game={g} trialStatus={trials[g.game_id]} />
             ))}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useCloud } from '../context/CloudContext';
 import { useNotifications } from '../context/NotificationContext';
@@ -49,10 +49,16 @@ export default function Header() {
   const { session } = useCloud();
   const { items: notifications, unreadCount, markRead, markAllRead } = useNotifications();
   const navigate = useNavigate();
+  const location = useLocation();
   const [scrolled, setScrolled] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
   const prevUnread = useRef(0);
+
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [location.pathname, location.search]);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20);
@@ -92,7 +98,17 @@ export default function Header() {
           Nexus<span className="logo-accent">Core</span>
         </Link>
 
-        <nav className="header-nav">
+        <button
+          type="button"
+          className="header-menu-btn"
+          aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen(v => !v)}
+        >
+          <span className="header-menu-icon" aria-hidden />
+        </button>
+
+        <nav className={`header-nav ${menuOpen ? 'header-nav--open' : ''}`}>
           <NavDropdown label="Store" items={STORE_ITEMS} />
           {isAuth && <NavDropdown label="Library" items={LIBRARY_ITEMS} />}
           {isAuth && <NavDropdown label="Cloud" items={CLOUD_ITEMS} />}

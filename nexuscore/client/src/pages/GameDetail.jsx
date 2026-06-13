@@ -222,15 +222,14 @@ export default function GameDetail() {
 
   return (
     <div className="page">
-      <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 60%', minWidth: 300 }}>
+      <div className="game-detail-grid">
+        <div className="game-detail-media">
           <div style={{ aspectRatio: '16/9', marginBottom: 20, borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--bg-hover)' }}>
             <img src={game.cover_url} alt={game.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
           </div>
-          <div style={{ display: 'flex', gap: 10, overflowX: 'auto' }}>
+          <div className="game-detail-thumbs">
             {(game.media?.length ? game.media : [{ url: game.cover_url }]).map((m, i) => (
-              <img key={i} src={m.url} alt="" onClick={() => setLightbox(m.url)}
-                style={{ height: 100, borderRadius: 8, cursor: 'pointer', objectFit: 'cover' }} />
+              <img key={i} src={m.url} alt="" onClick={() => setLightbox(m.url)} className="game-detail-thumb" />
             ))}
           </div>
           {lightbox && (
@@ -240,9 +239,9 @@ export default function GameDetail() {
           )}
         </div>
 
-        <div style={{ flex: '1 1 35%', minWidth: 280 }}>
-          <img src={game.cover_url} alt={game.name} style={{ width: '100%', borderRadius: 'var(--radius-lg)', marginBottom: 16 }} />
-          <h1 className="font-display" style={{ fontSize: 36, fontWeight: 700, marginBottom: 8 }}>{game.name}</h1>
+        <div className="game-detail-sidebar">
+          <img src={game.cover_url} alt={game.name} className="game-detail-sidebar-cover" style={{ width: '100%', borderRadius: 'var(--radius-lg)', marginBottom: 16 }} />
+          <h1 className="font-display game-detail-title">{game.name}</h1>
           <p style={{ color: 'var(--text-muted)', marginBottom: 4 }}>{game.developer_name}</p>
           <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
             <span style={{ background: 'var(--accent-dim)', padding: '4px 10px', borderRadius: 6, fontSize: 13 }}>{game.genre}</span>

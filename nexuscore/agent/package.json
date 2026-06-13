@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@microsoft/signalr": "^8.0.7",
+    "node-screenshots": "^0.2.1",
     "screenshot-desktop": "^1.15.0"
   }
 }

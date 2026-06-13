@@ -64,7 +64,7 @@ export default function Library() {
           {isTried ? 'No completed trials.' : tab === 'installed' ? 'No installed games yet — check Downloads.' : 'Your library is empty.'}
         </p>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 16 }}>
+        <div className="game-grid">
           {current.games.map(g => {
             const trial = trialMap[g.game_id];
             return (

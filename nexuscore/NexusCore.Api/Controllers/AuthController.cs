@@ -26,7 +26,9 @@ public class AuthController(DbService db, JwtTokenService jwt) : ControllerBase
                 "INSERT INTO users (username, email, password, cloud_plan) VALUES (@u, @e, @p, 'free'); SELECT LAST_INSERT_ID();",
                 new { u = body.Username.Trim(), e = body.Email.Trim().ToLowerInvariant(), p = hash });
             var user = await conn.QuerySingleAsync<dynamic>("SELECT * FROM users WHERE user_id=@id", new { id });
-            return StatusCode(201, new { token = jwt.CreateToken(user), user = AuthUser(user) });
+            var token = jwt.CreateToken(user);
+            AuthCookie.Set(Response, Request, token, jwt.GetTokenLifetime());
+            return StatusCode(201, new { user = AuthUser(user) });
         }
         catch (MySqlConnector.MySqlException ex) when (ex.Number == 1062)
         {
@@ -55,12 +57,21 @@ public class AuthController(DbService db, JwtTokenService jwt) : ControllerBase
             var user = users[0];
             if (!BCrypt.Net.BCrypt.Verify(body.Password, (string)user.password))
                 return ApiResults.Error(401, "Invalid credentials", "INVALID_CREDENTIALS");
-            return Ok(new { token = jwt.CreateToken(user), user = AuthUser(user) });
+            var token = jwt.CreateToken(user);
+            AuthCookie.Set(Response, Request, token, jwt.GetTokenLifetime());
+            return Ok(new { user = AuthUser(user) });
         }
         catch (Exception ex)
         {
             return ApiResults.Error(500, ex.Message, "SERVER_ERROR");
         }
+    }
+
+    [HttpPost("logout")]
+    public IActionResult Logout()
+    {
+        AuthCookie.Clear(Response, Request);
+        return Ok(new { message = "Logged out" });
     }
 
     private static object AuthUser(dynamic user) => new

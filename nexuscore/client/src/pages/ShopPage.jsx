@@ -8,7 +8,7 @@ import GameCard from '../components/GameCard';
 function Section({ title, titleColor, children, emptyText }) {
   const isEmpty = !children || (Array.isArray(children) && children.length === 0);
   return (
-    <section style={{ marginBottom: 48 }}>
+    <section className="shop-section">
       <h2 className="section-title" style={titleColor ? { color: titleColor } : {}}>{title}</h2>
       <div className="scroll-row">
         {isEmpty ? <p style={{ color: 'var(--text-muted)', padding: '8px 4px' }}>{emptyText}</p> : children}
@@ -85,7 +85,7 @@ export default function ShopPage() {
   }, [isAuth]);
 
   const cardWrap = (g) => (
-    <div key={g.game_id} style={{ minWidth: 180, maxWidth: 180, flexShrink: 0 }}>
+    <div key={g.game_id} className="scroll-row-item">
       <GameCard game={g} trialStatus={trials[g.game_id]} />
     </div>
   );
@@ -110,7 +110,7 @@ export default function ShopPage() {
 
         {loading && (
           <div style={{ display: 'flex', gap: 16, marginBottom: 48 }}>
-            {[1, 2, 3, 4].map(i => <div key={i} className="skeleton" style={{ width: 180, height: 280, borderRadius: 12 }} />)}
+            {[1, 2, 3, 4].map(i => <div key={i} className="skeleton scroll-row-item" style={{ height: 280, borderRadius: 12 }} />)}
           </div>
         )}
 

@@ -7,8 +7,12 @@
     "install:all": "cd client && npm install",
     "seed": "node seed.js",
     "server": "dotnet run --project NexusCore.Api --no-launch-profile --urls http://localhost:5000",
+    "server:network": "dotnet run --project NexusCore.Api --no-launch-profile --urls http://0.0.0.0:5000",
     "client": "cd client && npm run dev",
+    "client:network": "cd client && npm run dev -- --host 0.0.0.0",
     "dev": "concurrently -k -n api,web -c blue,green \"npm run server\" \"npm run client\"",
+    "dev:network": "concurrently -k -n api,web -c blue,green \"npm run server:network\" \"npm run client:network\"",
+    "sync:network-env": "node scripts/sync-network-env.js --network",
     "start": "npm run dev"
   },
   "devDependencies": {

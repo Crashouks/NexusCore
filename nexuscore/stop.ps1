@@ -1,5 +1,5 @@
-# Stop NexusCore dev processes on ports 5000 and 5173
-$ports = 5000, 5173
+# Stop NexusCore dev processes on API + Vite ports (including Vite fallback 5174+)
+$ports = 5000, 5173, 5174, 5175, 5176
 $killed = 0
 
 foreach ($port in $ports) {
@@ -14,8 +14,25 @@ foreach ($port in $ports) {
     }
 }
 
+# Stop orphaned NexusCore.Api if still running
+Get-Process -Name "NexusCore.Api" -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host "Stopping NexusCore.Api (PID $($_.Id))" -ForegroundColor Yellow
+    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+    $killed++
+}
+
+$ts = Get-Command tailscale -ErrorAction SilentlyContinue
+if (-not $ts) {
+    $default = "${env:ProgramFiles}\Tailscale\tailscale.exe"
+    if (Test-Path $default) { $ts = Get-Command $default -ErrorAction SilentlyContinue }
+}
+if ($ts) {
+    & $ts.Source serve reset 2>$null
+    Write-Host "Tailscale HTTPS serve disabled (back to HTTP-only)." -ForegroundColor DarkGray
+}
+
 if ($killed -eq 0) {
-    Write-Host "Nothing running on ports 5000 or 5173." -ForegroundColor DarkGray
+    Write-Host "Nothing running on ports 5000 or 5173-5176." -ForegroundColor DarkGray
 } else {
-    Write-Host "Stopped $killed process(es). You can run start.bat now." -ForegroundColor Green
+    Write-Host "Stopped $killed process(es). You can run start-site-network.bat now." -ForegroundColor Green
 }

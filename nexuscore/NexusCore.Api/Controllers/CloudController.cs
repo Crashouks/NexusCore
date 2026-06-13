@@ -10,7 +10,7 @@ namespace NexusCore.Api.Controllers;
 
 [ApiController]
 [Route("api/cloud")]
-public class CloudController(DbService db, SessionExpiryService sessions, ChatService chat, CloudServerService cloudServers) : ControllerBase
+public class CloudController(DbService db, SessionExpiryService sessions, ChatService chat, CloudServerService cloudServers, CloudDiagnosticsLog diag) : ControllerBase
 {
     private static readonly Dictionary<string, (string resolution, int fps, bool rayTracing)> PlanSpecs = new()
     {
@@ -44,6 +44,37 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
             });
         }
         catch (Exception ex) { return ApiResults.Error(500, ex.Message, "SERVER_ERROR"); }
+    }
+
+    [HttpGet("setup-info")]
+    [AllowAnonymous]
+    public IActionResult SetupInfo()
+    {
+        var port = Environment.GetEnvironmentVariable("PORT") ?? "5000";
+        var webPort = Environment.GetEnvironmentVariable("WEB_PORT") ?? "5173";
+        var publicApi = Environment.GetEnvironmentVariable("PUBLIC_API_URL");
+        var publicWeb = Environment.GetEnvironmentVariable("PUBLIC_WEB_URL");
+        var networkMode = Environment.GetEnvironmentVariable("NETWORK_MODE") == "1"
+            || Environment.GetEnvironmentVariable("API_BIND") == "0.0.0.0";
+        var agentApiUrl = !string.IsNullOrWhiteSpace(publicApi)
+            ? publicApi.TrimEnd('/')
+            : $"http://localhost:{port}/api";
+        return Ok(new
+        {
+            network_mode = networkMode,
+            public_api_url = publicApi,
+            public_web_url = publicWeb,
+            agent_config_api_url = agentApiUrl,
+            api_port = port,
+            web_port = webPort,
+            hints = new[]
+            {
+                "Laptop 1 (server): run start-site-network.bat",
+                "Laptop 2 (agent): config.json apiUrl = agent_config_api_url",
+                "Laptop 3 (player): open public_web_url in browser",
+                "Different networks: set PUBLIC_API_URL + PUBLIC_WEB_URL to Tailscale or tunnel URL in nexuscore/.env",
+            },
+        });
     }
 
     [HttpPost("subscribe")]
@@ -276,7 +307,10 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
             var (server, serverErr) = await cloudServers.ResolveServerForSessionAsync(
                 conn, body.ServerId.Value, body.GameId, userCloudPlan, body.ServerPassword);
             if (server == null)
+            {
+                diag.Warn("session", "Session start blocked", $"user={userId} server={body.ServerId} game={body.GameId} reason={serverErr}");
                 return ApiResults.Error(403, serverErr ?? "Server unavailable", "SERVER_UNAVAILABLE");
+            }
 
             var tier = (string)server.server_tier;
             var isRealStream = tier == "real";
@@ -312,6 +346,8 @@ public class CloudController(DbService db, SessionExpiryService sessions, ChatSe
                 await cloudServers.EnqueueLaunchJobAsync(conn, (int)sessionId, serverId, body.GameId, (string)server.executable_path);
                 launchStatus = "pending";
             }
+
+            diag.Info("session", "Session started", $"session={sessionId} user={userId} server={serverId} ({serverName}) real={isRealStream}");
 
             var specs = PlanSpecs.GetValueOrDefault(plan, PlanSpecs["free"]);
             return StatusCode(201, new

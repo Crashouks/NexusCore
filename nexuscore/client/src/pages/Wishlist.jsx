@@ -25,7 +25,7 @@ export default function Wishlist() {
       {games.length === 0 ? (
         <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 60 }}>No games in your wishlist yet.</p>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 16 }}>
+        <div className="game-grid">
           {games.map(g => (
             <div key={g.game_id} style={{ position: 'relative' }}>
               <GameCard game={g} />

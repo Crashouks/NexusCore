@@ -1,5 +1,8 @@
 /** API URL for the Node cloud agent (must be reachable from the gaming PC). */
 export function getAgentApiUrl() {
+  const publicUrl = import.meta.env.VITE_PUBLIC_API_URL;
+  if (publicUrl && /^https?:\/\//i.test(publicUrl)) return publicUrl.replace(/\/$/, '');
+
   const env = import.meta.env.VITE_API_URL;
   if (env && /^https?:\/\//i.test(env)) return env.replace(/\/$/, '');
 
@@ -13,35 +16,49 @@ export function getAgentApiUrl() {
   return 'http://localhost:5000/api';
 }
 
-export function buildAgentConfig(serverId, agentPassword = '') {
-  return {
+export function getPublicWebUrl() {
+  const u = import.meta.env.VITE_PUBLIC_WEB_URL;
+  if (u && /^https?:\/\//i.test(u)) return u.replace(/\/$/, '');
+  if (typeof window !== 'undefined') return window.location.origin;
+  return 'http://localhost:5173';
+}
+
+export function buildAgentConfig(serverId, agentPassword = '', playerPassword = '') {
+  const config = {
     apiUrl: getAgentApiUrl(),
     serverId: Number(serverId),
     password: agentPassword || '',
     pollIntervalMs: 3000,
+    streamMinFps: 2,
+    streamMaxFps: 20,
+    streamMinQuality: 22,
+    streamMaxQuality: 72,
   };
+  if (playerPassword) config.playerPassword = playerPassword;
+  return config;
 }
 
 export function agentSetupInstructions(serverId, serverName, agentPassword = '') {
   const apiUrl = getAgentApiUrl();
+  const webUrl = getPublicWebUrl();
   const pwdNote = agentPassword
     ? 'Agent password is included in the downloaded config.'
     : 'If you set an agent password in Admin, edit config.json and fill the password field.';
   return `NexusCore Cloud Agent — ${serverName}
 Server ID: ${serverId}
 API URL: ${apiUrl}
+Player site URL: ${webUrl}
 
-1. Admin → Cloud → download config.json (or use the button on your machine row)
-2. Save as: nexuscore/agent/config.json
-3. ${pwdNote}
-4. Run: nexuscore\\agent\\start-agent.bat
-   Or double-click start-all.bat in the project root (starts website + agent).
+1. Save config.json to nexuscore/agent/ on the gaming PC
+2. ${pwdNote}
+3. Run start-cloud-gaming.bat on the gaming PC
+4. Players open ${webUrl} (not localhost unless same machine)
 
-After the agent connects, this server shows "Agent: Connected" in Admin → Cloud.`;
+After the agent connects, Admin → Cloud shows "Agent: Connected".`;
 }
 
-export function downloadAgentConfigFile(serverId, agentPassword = '') {
-  const config = buildAgentConfig(serverId, agentPassword);
+export function downloadAgentConfigFile(serverId, agentPassword = '', playerPassword = '') {
+  const config = buildAgentConfig(serverId, agentPassword, playerPassword);
   const json = `${JSON.stringify(config, null, 2)}\n`;
   const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);

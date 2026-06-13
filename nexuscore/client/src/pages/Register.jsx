@@ -27,8 +27,8 @@ export default function Register() {
   };
 
   return (
-    <div className="page" style={{ maxWidth: 420, margin: '60px auto' }}>
-      <h1 className="font-display gradient-text" style={{ fontSize: 36, textAlign: 'center', marginBottom: 8 }}>Join NexusCore</h1>
+    <div className="page page--narrow">
+      <h1 className="font-display gradient-text auth-title">Join NexusCore</h1>
       <p style={{ textAlign: 'center', color: 'var(--text-muted)', marginBottom: 32 }}>Create your account</p>
       <form onSubmit={handleSubmit} className="card" style={{ padding: 32 }}>
         {['Username', 'Email', 'Password'].map((label, i) => (

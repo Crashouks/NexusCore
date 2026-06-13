@@ -41,8 +41,13 @@ export default function AdminPanel() {
   const [devRequests, setDevRequests] = useState([]);
   const [cloudData, setCloudData] = useState({ sessions: [], queue: [] });
   const [cloudServers, setCloudServers] = useState({ servers: [], capacity: 0, active_sessions: 0, available_slots: 0 });
+  const [cloudDiagnostics, setCloudDiagnostics] = useState({ logs: [], agent_log_file: '' });
+  const [cloudSetupInfo, setCloudSetupInfo] = useState(null);
   const [editServer, setEditServer] = useState(null);
+  const [manageGamesServer, setManageGamesServer] = useState(null);
   const [serverGameDraft, setServerGameDraft] = useState([]);
+  const [gamesModalDraft, setGamesModalDraft] = useState([]);
+  const [gamesModalSaving, setGamesModalSaving] = useState(false);
   const [trialData, setTrialData] = useState({ trials: [], stats: {} });
   const [purchases, setPurchases] = useState([]);
   const [forums, setForums] = useState([]);
@@ -55,6 +60,48 @@ export default function AdminPanel() {
   const { showToast } = useToast();
 
   const approvedGames = useMemo(() => games.filter(g => g.status === 'approved'), [games]);
+  const cloudEnabledGames = useMemo(() => approvedGames.filter(g => g.cloud_enabled), [approvedGames]);
+
+  const buildServerGameDraft = useCallback((mappings = []) => {
+    const byId = Object.fromEntries((mappings || []).map(m => [m.game_id, m.executable_path || '']));
+    return cloudEnabledGames.map(g => ({
+      game_id: g.game_id,
+      name: g.name,
+      enabled: Object.prototype.hasOwnProperty.call(byId, g.game_id),
+      executable_path: byId[g.game_id] || '',
+    }));
+  }, [cloudEnabledGames]);
+
+  const draftToMappings = useCallback((draft, isRealTier) => {
+    return draft
+      .filter(g => g.enabled)
+      .map(g => ({
+        game_id: g.game_id,
+        executable_path: isRealTier ? g.executable_path.trim() : '',
+      }))
+      .filter(g => !isRealTier || g.executable_path);
+  }, []);
+
+  const loadServerGameDraft = useCallback(async (serverId) => {
+    const data = await api.admin.cloudServerGames(serverId);
+    return buildServerGameDraft(data.mappings || []);
+  }, [buildServerGameDraft]);
+
+  const saveServerGameMappings = useCallback(async (server, draft) => {
+    const isRealTier = (server.server_tier || 'real') === 'real';
+    const mappings = draftToMappings(draft, isRealTier);
+    if (isRealTier) {
+      const missing = draft.filter(g => g.enabled && !g.executable_path?.trim());
+      if (missing.length) {
+        throw new Error(`Set .exe path for: ${missing.map(g => g.name).join(', ')}`);
+      }
+      if (!mappings.length) {
+        throw new Error('Select at least one game for a real PC server');
+      }
+    }
+    await api.admin.setCloudServerGames(server.server_id, mappings);
+    return mappings.length;
+  }, [draftToMappings]);
 
   useEffect(() => {
     setCarouselDraft(
@@ -111,6 +158,31 @@ export default function AdminPanel() {
 
   useEffect(() => { load(); }, [load]);
 
+  const loadCloudDiagnostics = useCallback(async () => {
+    try {
+      const data = await api.admin.cloudDiagnostics();
+      setCloudDiagnostics(data);
+    } catch { /* admin only */ }
+  }, []);
+
+  const loadCloudSetupInfo = useCallback(async () => {
+    try {
+      const data = await api.cloud.setupInfo();
+      setCloudSetupInfo(data);
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    if (tab !== 5) return;
+    loadCloudDiagnostics();
+    loadCloudSetupInfo();
+    const iv = setInterval(() => {
+      loadCloudDiagnostics();
+      loadCloudSetupInfo();
+    }, 5000);
+    return () => clearInterval(iv);
+  }, [tab, loadCloudDiagnostics, loadCloudSetupInfo]);
+
   const runAction = async (fn, successMsg) => {
     try {
       await fn();
@@ -131,9 +203,10 @@ export default function AdminPanel() {
 
   const openNewServer = () => {
     setServerGameDraft(
-      approvedGames.filter(g => g.cloud_enabled).map(g => ({
+      cloudEnabledGames.map(g => ({
         game_id: g.game_id,
         name: g.name,
+        enabled: false,
         executable_path: '',
       }))
     );
@@ -145,28 +218,30 @@ export default function AdminPanel() {
 
   const openEditServer = async (s) => {
     try {
-      const data = await api.admin.cloudServerGames(s.server_id);
-      const byId = Object.fromEntries((data.mappings || []).map(m => [m.game_id, m.executable_path]));
-      setServerGameDraft(
-        approvedGames.filter(g => g.cloud_enabled).map(g => ({
-          game_id: g.game_id,
-          name: g.name,
-          executable_path: byId[g.game_id] || '',
-        }))
-      );
+      setServerGameDraft(await loadServerGameDraft(s.server_id));
       setEditServer({ ...s, access_password: '', player_password: '' });
     } catch (err) {
-      showToast(err.message || 'Could not load game paths', 'error');
+      showToast(err.message || 'Could not load game list', 'error');
+    }
+  };
+
+  const openManageGames = async (s) => {
+    try {
+      setGamesModalDraft(await loadServerGameDraft(s.server_id));
+      setManageGamesServer(s);
+    } catch (err) {
+      showToast(err.message || 'Could not load games for this server', 'error');
     }
   };
   const trialStats = trialData.stats || {};
   const isAgentLive = (s) => s.last_heartbeat && (Date.now() - new Date(s.last_heartbeat).getTime()) < 90000;
   const isRealServer = (s) => (s.server_tier || 'real') === 'real';
 
-  const handleDownloadAgentConfig = (server, passwordOverride) => {
+  const handleDownloadAgentConfig = (server, passwordOverride, playerPasswordOverride) => {
     const pwd = passwordOverride ?? '';
-    downloadAgentConfigFile(server.server_id, pwd);
-    showToast(`Downloaded config.json — save to nexuscore/agent/`, 'success');
+    const playerPwd = playerPasswordOverride ?? '';
+    downloadAgentConfigFile(server.server_id, pwd, playerPwd);
+    showToast('Downloaded config.json — save to nexuscore/agent/', 'success');
   };
 
   const handleCopyAgentSetup = async (server, passwordOverride) => {
@@ -461,13 +536,36 @@ export default function AdminPanel() {
 
       {tab === 5 && (
         <>
+          <div className="glass" style={{ padding: 16, marginBottom: 20 }}>
+            <h3 className="font-display" style={{ margin: '0 0 8px', fontSize: 18 }}>Remote / multi-device testing</h3>
+            <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--text-muted)' }}>
+              Use <code style={{ fontSize: 11 }}>start-site-network.bat</code> on the host PC. Cloud agent and players use the URLs below (not localhost).
+            </p>
+            {cloudSetupInfo ? (
+              <div style={{ fontSize: 13, lineHeight: 1.7 }}>
+                <div><strong>Player website:</strong>{' '}
+                  <code style={{ fontSize: 12 }}>{cloudSetupInfo.public_web_url || `(host IP):${cloudSetupInfo.web_port}`}</code>
+                </div>
+                <div><strong>Agent config apiUrl:</strong>{' '}
+                  <code style={{ fontSize: 12 }}>{cloudSetupInfo.agent_config_api_url}</code>
+                </div>
+                {!cloudSetupInfo.public_api_url && (
+                  <p style={{ margin: '10px 0 0', color: 'var(--warning)', fontSize: 12 }}>
+                    Set <code>PUBLIC_API_URL</code> and <code>PUBLIC_WEB_URL</code> in <code>nexuscore/.env</code> for Tailscale/ngrok, then restart with start-site-network.bat.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 12 }}>Loading setup info…</p>
+            )}
+          </div>
+
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 12 }}>
             <div>
               <h3 className="font-display" style={{ margin: 0 }}>Streaming Servers</h3>
               <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: '6px 0 0' }}>
-                Register your gaming PC, map Unity builds, download agent config, then run{' '}
-                <code style={{ fontSize: 12 }}>start-all.bat</code> or{' '}
-                <code style={{ fontSize: 12 }}>nexuscore/agent/start-agent.bat</code>.
+                Register your gaming PC, use <strong>Games</strong> to choose which titles each server provides, then run{' '}
+                <code style={{ fontSize: 12 }}>start-cloud-gaming.bat</code>.
               </p>
             </div>
             <button type="button" className="btn btn-primary" style={{ fontSize: 13 }} onClick={openNewServer}>
@@ -496,7 +594,22 @@ export default function AdminPanel() {
                   <tr key={s.server_id} style={{ borderBottom: '1px solid var(--border)' }}>
                     <td style={{ padding: '10px 12px' }}>{s.name}</td>
                     <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 12 }}>{s.host}</td>
-                    <td style={{ padding: '10px 12px' }}>{s.game_count ?? 0}</td>
+                    <td style={{ padding: '10px 12px', maxWidth: 200 }}>
+                      {s.game_count > 0 ? (
+                        <span style={{ fontSize: 12 }} title={s.game_names || ''}>
+                          {s.game_count} game{s.game_count !== 1 ? 's' : ''}
+                          {s.game_names && (
+                            <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {s.game_names}
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                          {(s.server_tier || 'real') === 'real' ? 'None mapped' : 'All cloud games'}
+                        </span>
+                      )}
+                    </td>
                     <td style={{ padding: '10px 12px' }}>{s.active_sessions ?? 0} / {s.max_slots}</td>
                     <td style={{ padding: '10px 12px' }}>{s.has_password ? 'Yes' : 'None'}</td>
                     <td style={{ padding: '10px 12px', color: isAgentLive(s) ? 'var(--neon)' : 'var(--text-muted)' }}>
@@ -509,6 +622,8 @@ export default function AdminPanel() {
                       }}>{s.status}</span>
                     </td>
                     <td style={{ padding: '10px 12px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <button type="button" className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 12 }}
+                        onClick={() => openManageGames(s)}>Games</button>
                       <button type="button" className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 12 }}
                         onClick={() => openEditServer(s)}>Edit</button>
                       {isRealServer(s) && (
@@ -539,6 +654,33 @@ export default function AdminPanel() {
                 No machines yet. Add your PC, map game .exe paths, then run the cloud agent.
               </p>
             )}
+          </div>
+
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+              <div>
+                <h3 className="font-display" style={{ margin: 0, fontSize: 18 }}>Connection log</h3>
+                <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
+                  API + stream hub events. Agent file: <code style={{ fontSize: 11 }}>{cloudDiagnostics.agent_log_file || 'nexuscore/agent/logs/agent.log'}</code>
+                </p>
+              </div>
+              <button type="button" className="btn btn-ghost" style={{ fontSize: 12 }} onClick={loadCloudDiagnostics}>Refresh</button>
+            </div>
+            <div className="card" style={{ maxHeight: 220, overflow: 'auto', fontFamily: 'monospace', fontSize: 11, padding: 12 }}>
+              {(cloudDiagnostics.logs || []).length === 0 && (
+                <p style={{ color: 'var(--text-muted)', margin: 0 }}>No events yet — try connecting agent or starting a stream.</p>
+              )}
+              {(cloudDiagnostics.logs || []).slice().reverse().map((entry, i) => (
+                <div key={i} style={{
+                  marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid var(--border)',
+                  color: entry.level === 'error' ? 'var(--danger)' : entry.level === 'warn' ? 'var(--warning)' : 'var(--text-muted)',
+                }}>
+                  <span style={{ color: 'var(--text-dim)' }}>{new Date(entry.at).toLocaleTimeString()}</span>
+                  {' '}[{entry.level}] [{entry.source}] {entry.message}
+                  {entry.detail && <span style={{ color: 'var(--text-dim)' }}> — {entry.detail}</span>}
+                </div>
+              ))}
+            </div>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -754,7 +896,7 @@ export default function AdminPanel() {
                 {editServer.server_id && editServer.has_password ? ' — leave blank to keep' : ''}
               </label>
               <input type="password" value={editServer.access_password || ''} onChange={e => setEditServer({ ...editServer, access_password: e.target.value })}
-                placeholder="For nexuscore/agent/config.json"
+                placeholder="For nexuscore/agent/config.json — saved into config on download"
                 style={{ width: '100%', padding: 8, marginTop: 4, borderRadius: 'var(--radius)', background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text)' }} />
             </div>
             <div style={{ marginBottom: 12 }}>
@@ -763,10 +905,13 @@ export default function AdminPanel() {
                 {editServer.server_id && editServer.has_player_password ? ' — leave blank to keep' : ''}
               </label>
               <input type="password" value={editServer.player_password || ''} onChange={e => setEditServer({ ...editServer, player_password: e.target.value })}
-                placeholder="Users must enter this to connect"
+                placeholder="Users enter this on the site to connect"
                 style={{ width: '100%', padding: 8, marginTop: 4, borderRadius: 'var(--radius)', background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text)' }} />
               <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
-                Use for private PCs or maintenance servers. Leave empty for public fake servers.
+                Player password is stored on the server for the website. It is also written into config.json as a reminder (the agent ignores it).
+                {(editServer.server_tier || 'real') === 'real' && (
+                  <> Saving this machine auto-downloads <strong>config.json</strong> with both passwords when you set them.</>
+                )}
               </p>
             </div>
             {editServer.server_id && (
@@ -780,9 +925,9 @@ export default function AdminPanel() {
               <div className="glass" style={{ padding: 14, marginBottom: 16 }}>
                 <h4 style={{ margin: '0 0 8px', fontSize: 14 }}>Agent setup on this PC</h4>
                 <ol style={{ margin: '0 0 12px', paddingLeft: 20, fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6 }}>
-                  <li>Download <strong>config.json</strong> below (includes password if you typed one above).</li>
-                  <li>Save to <code style={{ fontSize: 11 }}>nexuscore/agent/config.json</code></li>
-                  <li>Run <code style={{ fontSize: 11 }}>start-all.bat</code> (app + agent) or <code style={{ fontSize: 11 }}>nexuscore/agent/start-agent.bat</code></li>
+                  <li>Fill in <strong>Agent password</strong> (and player password if needed) above, then click <strong>Save</strong>.</li>
+                  <li><strong>config.json</strong> downloads automatically — save it to <code style={{ fontSize: 11 }}>nexuscore/agent/config.json</code></li>
+                  <li>Run <code style={{ fontSize: 11 }}>start-cloud-gaming.bat</code></li>
                   <li>Status here should show <strong style={{ color: 'var(--neon)' }}>Agent: Connected</strong></li>
                 </ol>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -790,8 +935,9 @@ export default function AdminPanel() {
                     onClick={() => handleDownloadAgentConfig(
                       { server_id: editServer.server_id, name: editServer.name },
                       editServer.access_password || '',
+                      editServer.player_password || '',
                     )}>
-                    Download config.json
+                    Download config.json again
                   </button>
                   <button type="button" className="btn btn-ghost" style={{ fontSize: 13 }}
                     onClick={() => handleCopyAgentSetup(
@@ -803,36 +949,49 @@ export default function AdminPanel() {
                 </div>
               </div>
             )}
-            <div style={{ marginBottom: 12, display: editServer.server_tier === 'real' ? 'block' : 'none' }}>
-              <h4 style={{ margin: '0 0 8px', fontSize: 14 }}>Unity / game executables on this PC</h4>
+            <div style={{ marginBottom: 12 }}>
+              <h4 style={{ margin: '0 0 8px', fontSize: 14 }}>Games this server provides</h4>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
-              Full path to each cloud-enabled game build (.exe). Only mapped games can launch on this machine.
+              Check which cloud games this server can stream.
+              {(editServer.server_tier || 'real') === 'real'
+                ? ' Real machines need the .exe path for each selected game.'
+                : ' Fake/datacenter servers only need checkboxes — no .exe path.'}
             </p>
-            <div className="card" style={{ overflow: 'auto', maxHeight: 220, marginBottom: 16 }}>
+            <div className="card" style={{ overflow: 'auto', maxHeight: 260, marginBottom: 16 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+                    <th style={{ padding: '8px 10px', textAlign: 'left', width: 44 }}>On</th>
                     <th style={{ padding: '8px 10px', textAlign: 'left' }}>Game</th>
-                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>Executable path</th>
+                    {(editServer.server_tier || 'real') === 'real' && (
+                      <th style={{ padding: '8px 10px', textAlign: 'left' }}>Executable path (.exe)</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
                   {serverGameDraft.map(g => (
-                    <tr key={g.game_id} style={{ borderBottom: '1px solid var(--border)' }}>
-                      <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{g.name}</td>
+                    <tr key={g.game_id} style={{ borderBottom: '1px solid var(--border)', opacity: g.enabled ? 1 : 0.65 }}>
                       <td style={{ padding: '8px 10px' }}>
-                        <input value={g.executable_path}
-                          onChange={e => setServerGameDraft(prev => prev.map(x => x.game_id === g.game_id ? { ...x, executable_path: e.target.value } : x))}
-                          placeholder="C:\Games\MyUnityGame\game.exe"
-                          style={{ width: '100%', padding: 6, borderRadius: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+                        <input type="checkbox" checked={!!g.enabled}
+                          onChange={e => setServerGameDraft(prev => prev.map(x => x.game_id === g.game_id ? { ...x, enabled: e.target.checked } : x))} />
                       </td>
+                      <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{g.name}</td>
+                      {(editServer.server_tier || 'real') === 'real' && (
+                        <td style={{ padding: '8px 10px' }}>
+                          <input value={g.executable_path} disabled={!g.enabled}
+                            onChange={e => setServerGameDraft(prev => prev.map(x => x.game_id === g.game_id ? { ...x, executable_path: e.target.value } : x))}
+                            placeholder="C:\Games\MyGame\game.exe"
+                            style={{ width: '100%', padding: 6, borderRadius: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
               </table>
               {!serverGameDraft.length && (
-                <p style={{ padding: 16, color: 'var(--text-muted)', textAlign: 'center' }}>No cloud-enabled games — enable Cloud on a game first.</p>
+                <p style={{ padding: 16, color: 'var(--text-muted)', textAlign: 'center' }}>No cloud-enabled games — enable Cloud on a game in the Games tab first.</p>
               )}
+            </div>
             </div>
             <div style={{ marginBottom: 16 }}>
               <label style={{ fontSize: 13, color: 'var(--text-muted)' }}>Notes (optional)</label>
@@ -840,7 +999,9 @@ export default function AdminPanel() {
                 rows={2}
                 style={{ width: '100%', padding: 8, marginTop: 4, borderRadius: 'var(--radius)', background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text)', resize: 'vertical' }} />
             </div>
-            <button type="button" className="btn btn-primary" onClick={() => runAction(async () => {
+            <button type="button" className="btn btn-primary" onClick={() => {
+              const isRealTier = (editServer.server_tier || 'real') === 'real';
+              runAction(async () => {
               const payload = {
                 name: editServer.name,
                 host: editServer.host,
@@ -856,6 +1017,10 @@ export default function AdminPanel() {
               if (editServer.player_password) payload.player_password = editServer.player_password;
               else if (!editServer.server_id) payload.player_password = '';
 
+              const agentPwdForConfig = editServer.access_password || '';
+              const playerPwdForConfig = editServer.player_password || '';
+              const hadAgentPwd = !!editServer.has_password;
+
               let serverId = editServer.server_id;
               if (serverId) {
                 await api.admin.updateCloudServer(serverId, payload);
@@ -865,14 +1030,113 @@ export default function AdminPanel() {
                 const created = await api.admin.createCloudServer(payload);
                 serverId = created.server_id;
               }
-              const mappings = editServer.server_tier === 'real'
-                ? serverGameDraft.filter(g => g.executable_path?.trim()).map(g => ({ game_id: g.game_id, executable_path: g.executable_path.trim() }))
-                : [];
-              await api.admin.setCloudServerGames(serverId, mappings);
+              const enabledGames = serverGameDraft.filter(g => g.enabled);
+              if (enabledGames.length) {
+                if (isRealTier) {
+                  const missing = enabledGames.filter(g => !g.executable_path?.trim());
+                  if (missing.length) {
+                    throw new Error(`Set .exe path for: ${missing.map(g => g.name).join(', ')}`);
+                  }
+                }
+                await api.admin.setCloudServerGames(serverId, draftToMappings(serverGameDraft, isRealTier));
+              } else {
+                await api.admin.setCloudServerGames(serverId, []);
+              }
+
+              if (isRealTier) {
+                downloadAgentConfigFile(serverId, agentPwdForConfig, playerPwdForConfig);
+                if (hadAgentPwd && !agentPwdForConfig) {
+                  showToast('config.json downloaded — re-enter Agent password and save again to include it in the file', 'error');
+                } else {
+                  showToast('Saved — config.json downloaded. Copy to nexuscore/agent/ then run start-cloud-gaming.bat', 'success');
+                }
+              }
+
               setEditServer(null);
-            }, editServer.server_id ? 'Machine updated' : 'Machine added')}>
+              }, isRealTier ? null : (editServer.server_id ? 'Machine updated' : 'Machine added'));
+            }}>
               {editServer.server_id ? 'Save Changes' : 'Add Machine'}
             </button>
+          </>
+        )}
+      </Modal>
+
+      <Modal open={!!manageGamesServer} onClose={() => setManageGamesServer(null)} title={`Games — ${manageGamesServer?.name || 'Server'}`} wide>
+        {manageGamesServer && (
+          <>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
+              Choose which cloud games <strong>{manageGamesServer.name}</strong> can provide when players pick a server.
+              {isRealServer(manageGamesServer)
+                ? ' Real PC servers need the .exe path for each checked game.'
+                : ' Datacenter/fake servers only need checkboxes.'}
+            </p>
+            <div className="card" style={{ overflow: 'auto', maxHeight: 360, marginBottom: 16 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+                    <th style={{ padding: '8px 10px', textAlign: 'left', width: 44 }}>Provide</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>Game</th>
+                    {isRealServer(manageGamesServer) && (
+                      <th style={{ padding: '8px 10px', textAlign: 'left' }}>Executable path (.exe)</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {gamesModalDraft.map(g => (
+                    <tr key={g.game_id} style={{ borderBottom: '1px solid var(--border)', opacity: g.enabled ? 1 : 0.65 }}>
+                      <td style={{ padding: '8px 10px' }}>
+                        <input type="checkbox" checked={!!g.enabled}
+                          onChange={e => setGamesModalDraft(prev => prev.map(x => x.game_id === g.game_id ? { ...x, enabled: e.target.checked } : x))} />
+                      </td>
+                      <td style={{ padding: '8px 10px' }}>{g.name}</td>
+                      {isRealServer(manageGamesServer) && (
+                        <td style={{ padding: '8px 10px' }}>
+                          <input value={g.executable_path} disabled={!g.enabled}
+                            onChange={e => setGamesModalDraft(prev => prev.map(x => x.game_id === g.game_id ? { ...x, executable_path: e.target.value } : x))}
+                            placeholder="C:\Games\MyGame\game.exe"
+                            style={{ width: '100%', padding: 6, borderRadius: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!gamesModalDraft.length && (
+                <p style={{ padding: 16, color: 'var(--text-muted)', textAlign: 'center' }}>No cloud-enabled games — edit a game and check Cloud first.</p>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" className="btn btn-primary" disabled={gamesModalSaving}
+                onClick={async () => {
+                  setGamesModalSaving(true);
+                  try {
+                    const count = await saveServerGameMappings(manageGamesServer, gamesModalDraft);
+                    showToast(
+                      count
+                        ? `Server now provides ${count} game${count !== 1 ? 's' : ''}`
+                        : 'Cleared — this server offers all cloud games (default)',
+                      'success',
+                    );
+                    setManageGamesServer(null);
+                    await load();
+                  } catch (err) {
+                    showToast(err.message || 'Save failed', 'error');
+                  } finally {
+                    setGamesModalSaving(false);
+                  }
+                }}>
+                {gamesModalSaving ? 'Saving…' : 'Save games'}
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={() => setManageGamesServer(null)}>Cancel</button>
+              <button type="button" className="btn btn-ghost" style={{ marginLeft: 'auto' }}
+                onClick={() => setGamesModalDraft(prev => prev.map(g => ({ ...g, enabled: true })))}>
+                Select all
+              </button>
+              <button type="button" className="btn btn-ghost"
+                onClick={() => setGamesModalDraft(prev => prev.map(g => ({ ...g, enabled: false })))}>
+                Clear all
+              </button>
+            </div>
           </>
         )}
       </Modal>

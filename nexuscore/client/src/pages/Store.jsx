@@ -69,8 +69,8 @@ export default function Store() {
   const totalPages = Math.ceil(total / 20);
 
   return (
-    <div className="page" style={{ display: 'flex', gap: 32 }}>
-      <aside style={{ width: 240, flexShrink: 0 }}>
+    <div className="page store-layout">
+      <aside className="store-filters">
         <h2 className="font-display" style={{ fontSize: 22, marginBottom: 20 }}>Filters</h2>
         <div style={{ marginBottom: 20 }}>
           <label style={{ fontSize: 13, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Search</label>
@@ -116,17 +116,17 @@ export default function Store() {
         </div>
       </aside>
 
-      <main style={{ flex: 1 }}>
-        <h1 className="font-display" style={{ fontSize: 32, marginBottom: 24 }}>Store</h1>
+      <main className="store-main">
+        <h1 className="font-display page-heading">Store</h1>
         {loading ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 16 }}>
+          <div className="game-grid">
             {Array(8).fill(0).map((_, i) => <div key={i} className="skeleton" style={{ height: 280 }} />)}
           </div>
         ) : games.length === 0 ? (
           <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 60 }}>No games found.</p>
         ) : (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 16 }}>
+            <div className="game-grid">
               {games.map(g => <GameCard key={g.game_id} game={g} trialStatus={trials[g.game_id]} />)}
             </div>
             {totalPages > 1 && (
